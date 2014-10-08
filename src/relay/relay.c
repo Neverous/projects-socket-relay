@@ -15,34 +15,42 @@
 #include <fcntl.h>
 #include <netdb.h>
 #include <errno.h>
-#include <assert.h>
-#include <stdio.h>
 
 #include "relay.h"
 #include "log/log.h"
 #include "protocol/auth.h"
 #include "protocol/message.h"
 
-uint8_t rOpenTCPPort(SocketRelay *relay, uint16_t source, uint16_t destination);
-uint8_t rOpenUDPPort(SocketRelay *relay, uint16_t source, uint16_t destination);
+#define MAX_EVENTS 64
 
 Msg     *rReadMsg(BufferedSocket *socket);
 uint8_t rAuthenticate(SocketRelay *relay);
-
-uint8_t rEpollRegister(SocketRelay *relay, int32_t socket, uint32_t flags);
 uint8_t rEpollRegister(SocketRelay *relay, int32_t socket, uint32_t flags);
 uint8_t rEpollModify(SocketRelay *relay, int32_t socket, uint32_t flags);
 int8_t  rEpollWait( SocketRelay *relay,
                     struct epoll_event *events,
                     uint8_t maxEvents);
 
+uint8_t rProcessMessages(SocketRelay *relay);
+uint8_t rProcessChannel(SocketRelay *relay, int32_t fd, uint32_t flags);
+SocketChannel *rGetChannelFD(SocketRelay *relay, int32_t fd);
+uint8_t rOpenChannel(SocketRelay *relay, MsgOpenChannel *cha);
+uint8_t rOpenChannelTCP(SocketRelay *relay, SocketChannel *channel, MsgOpenChannel *cha);
+uint8_t rOpenChannelUDP(SocketRelay *relay, SocketChannel *channel, MsgOpenChannel *cha);
+void    rCloseChannelMsg(SocketRelay *relay, MsgCloseChannel *clo);
+void    rCloseChannelFD(SocketRelay *relay, int32_t fd);
+void    rCloseChannel(  SocketRelay *relay,
+                        SocketChannel *channel,
+                        uint8_t msg);
+
+void            rFreeChannel(SocketChannel *channel);
+SocketChannel   *rAllocChannel(void);
+
 uint8_t rConnect(SocketRelay *relay)
 {
-    struct sockaddr_in  relay_addr;
     struct hostent      *relay_host;
-    struct sockaddr_in  server_addr;
+    struct sockaddr_in  relay_addr;
     memset((char *) &relay_addr, 0, sizeof(relay_addr));
-    memset((char *) &server_addr, 0, sizeof(server_addr));
 
     struct timeval timeout;
     memset((char *) &timeout, 0, sizeof(timeout));
@@ -50,273 +58,147 @@ uint8_t rConnect(SocketRelay *relay)
     int32_t opt = 1;
     BufferedSocket *control = &relay->connection.control;
 
-    NOTICE(&relay->log, "Starting listening for control connection.");
-    int32_t consock = socket(AF_INET, SOCK_STREAM, 0);
-    if(consock < 0)
+    NOTICE( &relay->log,
+            "Connecting to %s:%u.",
+            relay->control.host,
+            relay->control.port);
+    if(bSocket(control, AF_INET, SOCK_STREAM, 0) < 0)
     {
         ERROR(&relay->log, "Error opening socket: %s!", strerror(errno));
-        return 0;
-    }
-
-    DEBUG(&relay->log, "Socket opened.");
-
-    if(setsockopt(  consock,
-                    SOL_SOCKET,
-                    SO_REUSEADDR,
-                    (char *) &opt,
-                    sizeof(opt)) < 0)
-        WARNING(&relay->log,
-                "Cannot set SO_REUSEADDR: %s!",
-                strerror(errno));
-
-    DEBUG(&relay->log, "SO_REUSEADDR set.");
-
-    relay_addr.sin_family = AF_INET;
-    if(relay->control.host)
-    {
-        NOTICE(&relay->log, "Looking up %s address.", relay->control.host);
-        relay_host = gethostbyname(relay->control.host);
-        if(!relay)
-        {
-            ERROR(&relay->log, "Cannot get host address: %s!", strerror(errno));
-            bSocketClose(control, 0);
-            return 0;
-        }
-
-        memcpy(&relay_addr.sin_addr.s_addr, relay_host->h_addr_list[0], relay_host->h_length);
-    }
-
-    else
-        relay_addr.sin_addr.s_addr  = INADDR_ANY;
-
-    relay_addr.sin_port = htons(relay->control.port);
-    NOTICE(&relay->log, "Binding socket to %s:%u.", relay->control.host?relay->control.host:"0.0.0.0", relay->control.port);
-    if(bind(consock, (struct sockaddr *) &relay_addr, sizeof(relay_addr)) < 0)
-    {
-        ERROR(&relay->log, "Error binding socket: %s!", strerror(errno));
-        close(consock);
-        return 0;
-    }
-
-    INFO(&relay->log, "Socket binded to %s:%u.", relay->control.host?relay->control.host:"0.0.0.0", relay->control.port);
-    NOTICE(&relay->log, "Setting up listening.");
-    if(listen(consock, 1) < 0)
-    {
-        ERROR(&relay->log, "Error on listen: %s!", strerror(errno));
-        close(consock);
-        return 0;
-    }
-
-    while(!control->socket)
-    {
-        socklen_t server_size = sizeof(server_addr);
-        NOTICE(&relay->log, "Waiting for connection.");
-        if(bSocketAccept(   control,
-                            consock,
-                            (struct sockaddr *) &server_addr,
-                            &server_size) < 0)
-        {
-            ERROR(&relay->log, "Error on accept: %s!", strerror(errno));
-            close(consock);
-            bSocketClose(control, 0);
-            return 0;
-        }
-
-        char host[NI_MAXHOST];
-        char port[NI_MAXSERV];
-        if(getnameinfo( (struct sockaddr *) &server_addr,
-                        server_size,
-                        host,
-                        sizeof(host),
-                        port,
-                        sizeof(port),
-                        NI_NUMERICHOST | NI_NUMERICSERV) == 0)
-            INFO(&relay->log, "Control connected with %s:%s.", host, port);
-
-        else
-            INFO(&relay->log, "Control connected.");
-
-        if(setsockopt(  control->socket,
-                        IPPROTO_TCP,
-                        TCP_NODELAY,
-                        (char *) &opt,
-                        sizeof(opt)) < 0)
-            WARNING(&relay->log,
-                    "Cannot set TCP_NODELAY: %s!",
-                    strerror(errno));
-
-        DEBUG(&relay->log, "TCP_NODELAY set.");
-        timeout.tv_usec = 1000;
-        if(setsockopt(  control->socket,
-                        SOL_SOCKET,
-                        SO_RCVTIMEO,
-                        (char *) &timeout,
-                        sizeof(timeout)) < 0)
-        {
-            ERROR(  &relay->log,
-                    "Cannot set read timeout: %s!",
-                    strerror(errno));
-
-            close(consock);
-            bSocketClose(control, 0);
-            return 0;
-        }
-
-        DEBUG(&relay->log, "Read timeout set.");
-        rAuthenticate(relay);
-    }
-
-    assert(control->socket > 0);
-    close(consock);
-    NOTICE(&relay->log, "Creating epoll.");
-    if((relay->connection.epoll = epoll_create1(0)) < 0)
-    {
-        ERROR(&relay->log, "Cannot create epoll: %s!", strerror(errno));
         bSocketClose(control, 0);
         return 0;
     }
 
-    return 1;
+    DEBUG(&relay->log, "Socket opened.");
+    if(setsockopt(  control->socket,
+                    IPPROTO_TCP,
+                    TCP_NODELAY,
+                    (char *) &opt,
+                    sizeof(opt)) < 0)
+        WARNING(&relay->log, "Cannot set TCP_NODELAY: %s!", strerror(errno));
+
+    DEBUG(&relay->log, "TCP_NODELAY set.");
+    timeout.tv_usec = 1000;
+    if(setsockopt(  control->socket,
+                    SOL_SOCKET,
+                    SO_RCVTIMEO,
+                    (char *) &timeout,
+                    sizeof(timeout)) < 0)
+    {
+        ERROR(&relay->log, "Cannot set read timeout: %s!", strerror(errno));
+        bSocketClose(control, 0);
+        return 0;
+    }
+
+    DEBUG(&relay->log, "Read timeout set.");
+    NOTICE(&relay->log, "Looking up %s address.", relay->control.host);
+    relay_host = gethostbyname(relay->control.host);
+    if(!relay_host)
+    {
+        ERROR(&relay->log, "Cannot get host address: %s!", strerror(errno));
+        bSocketClose(control, 0);
+        return 0;
+    }
+
+    relay_addr.sin_family = AF_INET;
+    memcpy(&relay_addr.sin_addr.s_addr, relay_host->h_addr_list[0], relay_host->h_length);
+    relay_addr.sin_port = htons(relay->control.port);
+    NOTICE(&relay->log, "Connecting...");
+    if(bSocketConnect(  control,
+                        (struct sockaddr *) &relay_addr,
+                        sizeof(relay_addr)) < 0)
+    {
+        ERROR(&relay->log, "Cannot connect: %s!", strerror(errno));
+        bSocketClose(control, 0);
+        return 0;
+    }
+
+    INFO(   &relay->log,
+            "Connected to %s:%u.",
+            relay->control.host,
+            relay->control.port);
+
+    return rAuthenticate(relay);
 }
 
 void rDisconnect(SocketRelay *relay, const char *reason)
 {
-    NOTICE(&relay->log, "Disconnecting control.");
+    NOTICE( &relay->log,
+            "Disconnecting from %s:%u.",
+            relay->control.host,
+            relay->control.port);
+
     bSocketClose(&relay->connection.control, 1);
-    INFO(&relay->log, "Control disconnected, reason %s.", reason);
+    INFO(   &relay->log,
+            "Disconnected from %s:%u, reason %s.",
+            relay->control.host,
+            relay->control.port,
+            reason);
+
     return;
 }
 
-uint8_t rOpenPorts(SocketRelay *relay)
+void rProcess(SocketRelay *relay)
 {
-    NOTICE(&relay->log, "Opening ports.");
-    const char *port = relay->control.ports;
-    uint32_t move = 0;
-    int32_t count = 0;
-    while(*port)
+    BufferedSocket *control = &relay->connection.control;
+    assert(control->socket > 0);
+    if((relay->connection.epoll = epoll_create1(0)) < 0)
     {
-        uint16_t source = 0;
-        uint16_t destination = 0;
-        char protocol[4] = {};
-        count = sscanf(port, "%3s:%hu:%hu%n", protocol, &source, &destination, &move);
-        assert(count == 3);
-        assert(move >= 7);
-        assert(source > 0);
-        assert(destination > 0);
-        assert(protocol[2] == 'p');
-        switch(*protocol)
+        ERROR(&relay->log, "Cannot create epoll: %s!", strerror(errno));
+        bSocketClose(control, 0);
+        return;
+    }
+
+    if(!rEpollRegister( relay,
+                        control->socket,
+                        EPOLLIN | EPOLLPRI))
+    {
+        bSocketClose(control, 0);
+        return;
+    }
+
+    NOTICE(&relay->log, "Processing.");
+    struct epoll_event events[MAX_EVENTS];
+    int8_t count = 0;
+    while((count = rEpollWait(relay, events, MAX_EVENTS)) >= 0)
+    {
+        if(!relay->connection.control.socket)
         {
-            case 't':
-                assert(protocol[1] = 'c');
-                if(!rOpenTCPPort(relay, source, destination))
-                    return 0;
-
-                break;
-
-            case 'u':
-                assert(protocol[1] = 'd');
-                if(!rOpenUDPPort(relay, source, destination))
-                    return 0;
-
-                break;
-
-            default:
-                ERROR(&relay->log, "Invalid port definition %s", port);
-                return 0;
-                break;
+            ERROR(&relay->log, "Control connection unavailable.");
+            /*if(sConnect(relay) && !sEpollRegister( relay,
+                                                    control->socket,
+                                                    EPOLLIN | EPOLLPRI))
+            {
+                bSocketClose(control, 0);
+                return;
+            }*/
+            return;
         }
 
-        port += move;
-        assert(!*port || *port == ',');
-        if(*port == ',')
-            ++ port;
-    }
-
-    return 1;
-}
-
-inline
-uint8_t rOpenTCPPort(SocketRelay *relay, uint16_t source, uint16_t destination)
-{
-    struct hostent      *relay_host;
-    struct sockaddr_in  relay_addr;
-    memset((char *) &relay_addr, 0, sizeof(relay_addr));
-
-    int32_t opt = 1;
-    RelayPort *port = &relay->connection.port[relay->connection.ports ++];
-
-    NOTICE(&relay->log, "Opening TCP port %hu -> %hu", source, destination);
-    port->port      = destination;
-    port->socket    = socket(AF_INET, SOCK_STREAM, 0);
-    if(port->socket < 0)
-    {
-        ERROR(&relay->log, "Error opening socket: %s!", strerror(errno));
-        return 0;
-    }
-
-    DEBUG(&relay->log, "Socket opened.");
-
-    if(setsockopt(  port->socket,
-                    SOL_SOCKET,
-                    SO_REUSEADDR,
-                    (char *) &opt,
-                    sizeof(opt)) < 0)
-        WARNING(&relay->log,
-                "Cannot set SO_REUSEADDR: %s!",
-                strerror(errno));
-
-    DEBUG(&relay->log, "SO_REUSEADDR set.");
-
-    relay_addr.sin_family = AF_INET;
-    if(relay->control.host)
-    {
-        NOTICE(&relay->log, "Looking up %s address.", relay->control.host);
-        relay_host = gethostbyname(relay->control.host);
-        if(!relay)
+        DEBUG(&relay->log, "Got %d events to process.", count);
+        for(int8_t e = 0; e < count; ++ e)
         {
-            ERROR(&relay->log, "Cannot get host address: %s!", strerror(errno));
-            bSocketClose(&relay->connection.control, 0);
-            return 0;
+            if(events[e].data.fd == control->socket)
+            {
+                if(events[e].events & EPOLLOUT)
+                {
+                    DEBUG(&relay->log, "Control socket ready for write.");
+                    bSocketWrite(control);
+                }
+
+                if(events[e].events & EPOLLIN)
+                {
+                    DEBUG(&relay->log, "Control socket ready for read.");
+                    if(!rProcessMessages(relay))
+                        break;
+                }
+            }
+
+            else
+                rProcessChannel(relay, events[e].data.fd, events[e].events);
         }
-
-        memcpy(&relay_addr.sin_addr.s_addr, relay_host->h_addr_list[0], relay_host->h_length);
     }
 
-    else
-        relay_addr.sin_addr.s_addr  = INADDR_ANY;
-
-    relay_addr.sin_port = htons(source);
-    NOTICE(&relay->log, "Binding socket to %s:%u.", relay->control.host?relay->control.host:"0.0.0.0", source);
-    if(bind(port->socket, (struct sockaddr *) &relay_addr, sizeof(relay_addr)) < 0)
-    {
-        ERROR(&relay->log, "Error binding socket: %s!", strerror(errno));
-        close(port->socket);
-        return 0;
-    }
-
-    INFO(&relay->log, "Socket binded to %s:%u.", relay->control.host?relay->control.host:"0.0.0.0", source);
-    NOTICE(&relay->log, "Setting up listening.");
-    if(listen(port->socket, 5) < 0)
-    {
-        ERROR(&relay->log, "Error on listen: %s!", strerror(errno));
-        close(port->socket);
-        return 0;
-    }
-
-    return rEpollRegister(relay, port->socket, EPOLLIN | EPOLLPRI);
-}
-
-inline
-uint8_t rOpenUDPPort(SocketRelay *relay, uint16_t source, uint16_t destination)
-{
-    NOTICE(&relay->log, "Opening UDP port %hu -> %hu", source, destination);
-    CRITICAL(&relay->log, "Not yet implemented.");
-    return 0;
-}
-
-void rListen(SocketRelay *relay)
-{
-    CRITICAL(&relay->log, "Not yet implemented!");
     return;
 }
 
@@ -336,16 +218,22 @@ Msg *rReadMsg(BufferedSocket *socket)
     {
         case NOP:           full = sizeof(MsgNop);
             break;
+
         case PING:          full = sizeof(MsgPing);
             break;
+
         case PONG:          full = sizeof(MsgPong);
             break;
+
         case CHALLENGE:     full = sizeof(MsgChallenge);
             break;
+
         case RESPONSE:      full = sizeof(MsgResponse);
             break;
+
         case OPEN_CHANNEL:  full = sizeof(MsgOpenChannel);
             break;
+
         case CLOSE_CHANNEL: full = sizeof(MsgCloseChannel);
             break;
     }
@@ -366,42 +254,33 @@ uint8_t rAuthenticate(SocketRelay *relay)
     BufferedSocket *control = &relay->connection.control;
 
     NOTICE(&relay->log, "Authenticating...");
-    DEBUG(&relay->log, "Sending challenge...");
-    MsgChallenge cha;
-    cha.type = CHALLENGE;
-    aPrepareChallenge(&cha.challenge);
-    relay->connection.secret = aGetSecretByte(&cha.challenge);
-    if(!bOutBufferPut(control, (uint8_t *) &cha, sizeof(cha)) || bSocketWrite(control) != sizeof(cha))
+    MsgChallenge *cha = (MsgChallenge *) rReadMsg(control);
+    if(!cha || cha->type != CHALLENGE)
     {
-        ERROR(&relay->log, "Cannot write auth challenge: %s!", strerror(errno));
+        ERROR(&relay->log, "Cannot read auth challenge: %s!", strerror(errno));
         bSocketClose(control, 0);
         return 0;
     }
 
-    DEBUG(&relay->log, "Wrote auth challenge.");
-    MsgResponse *res = (MsgResponse *) rReadMsg(control);
-    if(!res || res->type != RESPONSE)
-    {
-        ERROR(&relay->log, "Cannot read auth response: %s!", strerror(errno));
-        bSocketClose(control, 0);
-        return 0;
-    }
+    DEBUG(&relay->log, "Read auth challenge.");
+    relay->connection.secret = aGetSecretByte(&cha->challenge);
 
-    DEBUG(&relay->log, "Read auth response.");
-    AuthHash wanted;
-    aPrepareResponse(   &wanted,
-                        &cha.challenge,
+    MsgResponse res;
+    res.type = RESPONSE;
+
+    aPrepareResponse(   &res.response,
+                        &cha->challenge,
                         relay->control.password,
                         relay->connection.secret);
 
-    if(!aCompareHash(&wanted, &res->response))
+    if(!bOutBufferPut(control, (uint8_t *) &res, sizeof(res)) || bSocketWrite(control) != sizeof(res))
     {
-        ERROR(&relay->log, "Authentication failure! Disconnecting.");
+        ERROR(&relay->log, "Cannot write auth response: %s!", strerror(errno));
         bSocketClose(control, 0);
         return 0;
     }
 
-    NOTICE(&relay->log, "Control connection authenticated.");
+    DEBUG(&relay->log, "Wrote auth response.");
     if(fcntl(   control->socket,
                 F_SETFL,
                 O_NONBLOCK | fcntl( control->socket,
@@ -413,6 +292,11 @@ uint8_t rAuthenticate(SocketRelay *relay)
 
     else
         DEBUG(&relay->log, "Set socket non-blocking.");
+
+    INFO(   &relay->log,
+            "Authenticated with %s:%u.",
+            relay->control.host,
+            relay->control.port);
 
     return 1;
 }
@@ -487,13 +371,12 @@ int8_t rEpollWait(  SocketRelay *relay,
             DEBUG(&relay->log, "Peer connection broke.");
             if(events[c].data.fd == relay->connection.control.socket)
             {
-                rDisconnect(relay, "server closed connection");
+                rDisconnect(relay, "relay closed connection");
                 return 0;
             }
 
-            // check for ports
-            // else
-            // rCloseChannelFD(relay, events[c].data.fd);
+            else
+                rCloseChannelFD(relay, events[c].data.fd);
 
             continue;
         }
@@ -505,4 +388,358 @@ int8_t rEpollWait(  SocketRelay *relay,
     }
 
     return e;
+}
+
+inline
+uint8_t rProcessMessages(SocketRelay *relay)
+{
+    BufferedSocket *control = &relay->connection.control;
+    uint8_t done = 0;
+    while(!done)
+    {
+        int32_t bytes = bSocketRead(control);
+        if(bytes == -1)
+        {
+            if(errno != EAGAIN && errno != EWOULDBLOCK)
+            {
+                ERROR(  &relay->log,
+                        "Error while reading from control: %s!",
+                        strerror(errno));
+
+                rDisconnect(relay, "read error");
+                return 0;
+            }
+
+            done = 1;
+        }
+
+        DEBUG(&relay->log, "Read %ld bytes from socket.", bytes);
+
+        Msg *msg = NULL;
+        uint8_t processed = 0;
+        while(  !processed
+            &&  (msg = (Msg *) bInBufferGet(control, sizeof(Msg), 0)))
+        {
+            DEBUG(&relay->log, "Processing message from relay.");
+            switch(msg->type)
+            {
+                case OPEN_CHANNEL:
+                    {
+                        MsgOpenChannel *ope = (MsgOpenChannel *)
+                            bInBufferGet(control, sizeof(MsgOpenChannel), 0);
+
+                        if(!ope)
+                            processed = 1;
+
+                        else
+                        {
+                            bInBufferPop(control, sizeof(MsgOpenChannel));
+                            rOpenChannel(relay, ope);
+                        }
+                    }
+                    break;
+
+                case CLOSE_CHANNEL:
+                    {
+                        MsgCloseChannel *clo = (MsgCloseChannel *)
+                            bInBufferGet(control, sizeof(MsgCloseChannel), 0);
+
+                        if(!clo)
+                            processed = 1;
+
+                        else
+                        {
+                            bInBufferPop(control, sizeof(MsgCloseChannel));
+                            rCloseChannelMsg(relay, clo);
+                        }
+                    }
+                    break;
+
+                default:
+                    {
+                        ERROR(  &relay->log,
+                                "Invalid message from relay: %s!",
+                                mGetTypeStr(msg->type));
+
+                        rDisconnect(relay, "invalid message");
+                        return 0;
+                    }
+                    break;
+            }
+        }
+    }
+
+    return 1;
+}
+
+inline
+uint8_t rProcessChannel(SocketRelay *relay, int32_t fd, uint32_t flags)
+{
+    SocketChannel *channel = rGetChannelFD(relay, fd);
+    if(!channel)
+    {
+        ERROR(  &relay->log,
+                "Cannot find channel responsible for fd: %ld!",
+                fd);
+
+        close(fd);
+        return 0;
+    }
+
+    if(flags & EPOLLIN)
+    {
+        if(fd == channel->cha.socket)
+        {
+            bSocketReadInto(&channel->cha, &channel->end.out);
+            rEpollModify(relay, channel->cha.socket, EPOLLOUT);
+        }
+
+        else if(fd == channel->end.socket)
+        {
+            bSocketReadInto(&channel->end, &channel->cha.out);
+            rEpollModify(relay, channel->end.socket, EPOLLOUT);
+        }
+    }
+
+    if(flags & EPOLLOUT)
+    {
+        if(fd == channel->cha.socket)
+            bSocketWrite(&channel->cha);
+
+        else if(fd == channel->end.socket)
+            bSocketWrite(&channel->end);
+    }
+
+    return 1;
+}
+
+inline
+SocketChannel *rGetChannelFD(SocketRelay *relay, int32_t fd)
+{
+    SocketChannel *cur = relay->channels;
+    while(cur &&  fd != cur->end.socket && fd != cur->cha.socket)
+        cur = cur->next;
+
+    return cur;
+}
+
+inline
+uint8_t rOpenChannel(SocketRelay *relay, MsgOpenChannel *cha)
+{
+    NOTICE(&relay->log, "Opening new channel.");
+    SocketChannel *channel = rAllocChannel();
+    if(!channel)
+    {
+        WARNING(&relay->log, "All channels used!");
+        return 0;
+    }
+
+    // CONNECT
+    aPrepareResponse(   &channel->token,
+                        &cha->challenge,
+                        relay->control.password,
+                        relay->connection.secret);
+
+    switch(cha->proto)
+    {
+        case SOCK_STREAM:
+            if(!rOpenChannelTCP(relay, channel, cha))
+                return 0;
+
+            break;
+
+        case SOCK_DGRAM:
+            // TODO
+
+        default:
+            ERROR(&relay->log, "Invalid channel protocol: %d!", cha->proto);
+            return 0;
+            break;
+    }
+
+    if(relay->channels)
+        relay->channels->prev = channel;
+
+    channel->next = relay->channels;
+    relay->channels = channel;
+    return 1;
+}
+
+inline
+uint8_t rOpenChannelTCP(SocketRelay *relay, SocketChannel *channel, MsgOpenChannel *cha)
+{
+    struct hostent      *end;
+    struct sockaddr_in  end_addr;
+    memset((char *) &end_addr, 0, sizeof(end_addr));
+
+    int32_t opt = 0;
+    if(bSocket(&channel->end, AF_INET, SOCK_STREAM, 0) < 0)
+    {
+        ERROR(  &relay->log,
+                "Error opening socket: %s!",
+                strerror(errno));
+
+        bSocketClose(&channel->end, 0);
+        return 0;
+    }
+
+    if(setsockopt(  channel->end.socket,
+                    IPPROTO_TCP,
+                    TCP_NODELAY,
+                    (char *) &opt,
+                    sizeof(opt)) < 0)
+        WARNING(&relay->log,
+                "Cannot set TCP_NODELAY: %s!",
+                strerror(errno));
+
+    NOTICE( &relay->log,
+            "Looking up %s address.",
+            relay->destination);
+
+    end = gethostbyname(relay->destination);
+    if(!end)
+    {
+        ERROR(  &relay->log,
+                "Cannot get host address: %s!",
+                strerror(errno));
+
+        bSocketClose(&channel->end, 0);
+        return 0;
+    }
+
+    end_addr.sin_family = AF_INET;
+    memcpy( &end_addr.sin_addr.s_addr,
+            end->h_addr_list[0],
+            end->h_length);
+
+    end_addr.sin_port = cha->port;
+    NOTICE(&relay->log, "Channel connecting...");
+    if(bSocketConnect(  &channel->end,
+                        (struct sockaddr *) &end_addr,
+                        sizeof(end_addr)) < 0)
+    {
+        ERROR(&relay->log, "Cannot connect: %s!", strerror(errno));
+        bSocketClose(&channel->end, 0);
+        return 0;
+    }
+
+    if(fcntl(   channel->end.socket,
+                F_SETFL,
+                O_NONBLOCK | fcntl( channel->end.socket,
+                                    F_GETFL,
+                                    0)) == -1)
+        WARNING(&relay->log,
+                "Cannot set socket non-blocking: %s!",
+                strerror(errno));
+
+    INFO(&relay->log, "Connected with endpoint.");
+    return 1;
+}
+
+inline
+uint8_t rOpenChannelUDP(SocketRelay *relay, SocketChannel *channel, MsgOpenChannel *cha)
+{
+    return 0;
+}
+
+inline
+void rCloseChannelMsg(SocketRelay *relay, MsgCloseChannel *clo)
+{
+    SocketChannel *cur = relay->channels;
+    while(cur)
+    {
+        if(aCompareHash(&clo->response, &cur->token))
+        {
+            rCloseChannel(relay, cur, 0);
+            return;
+        }
+
+        cur = cur->next;
+    }
+
+    WARNING(&relay->log, "Channel not found.");
+    return;
+}
+
+inline
+void rCloseChannelFD(SocketRelay *relay, int32_t fd)
+{
+    SocketChannel *cur = rGetChannelFD(relay, fd);
+    if(!cur)
+    {
+        WARNING(&relay->log, "Channel not found.");
+        return;
+    }
+
+    if(fd == cur->end.socket)
+        rCloseChannel(relay, cur, 1);
+
+    else if(fd == cur->cha.socket)
+        rCloseChannel(relay, cur, 0);
+
+    return;
+}
+
+inline
+void rCloseChannel(SocketRelay *relay, SocketChannel *channel, uint8_t msg)
+{
+    BufferedSocket *control = &relay->connection.control;
+    if(msg)
+    {
+        MsgCloseChannel clo;
+        clo.type = CLOSE_CHANNEL;
+        memcpy(&clo.response, &channel->token, sizeof(AuthHash));
+        bOutBufferPut(control, (uint8_t *) &clo, sizeof(MsgCloseChannel));
+        rEpollModify(relay, control->socket, EPOLLOUT | EPOLLIN | EPOLLPRI);
+    }
+
+    bSocketClose(&channel->end, 1);
+    bSocketClose(&channel->cha, 1);
+    rFreeChannel(channel);
+}
+
+static SocketChannel *freeChannels;
+
+inline
+void rFreeChannel(SocketChannel *channel)
+{
+    if(channel->prev)
+        channel->prev->next = channel->next;
+
+    if(channel->next)
+        channel->next->prev = channel->prev;
+
+    channel->prev = NULL;
+    channel->next = freeChannels;
+    if(freeChannels)
+        freeChannels->prev = channel;
+
+    freeChannels = channel;
+}
+
+inline
+SocketChannel *rAllocChannel(void)
+{
+    if(!freeChannels)
+    {
+        int32_t count = 8192 / sizeof(SocketChannel);
+        SocketChannel *cur = (SocketChannel *)
+            malloc(count * sizeof(SocketChannel));
+
+        memset(cur, 0, count * sizeof(SocketChannel));
+        freeChannels = cur++;
+        for(int c = 1; c < count; ++ c)
+        {
+            freeChannels->prev = cur;
+            cur->next = freeChannels;
+            freeChannels = cur ++;
+        }
+    }
+
+    SocketChannel *channel = freeChannels;
+    freeChannels = freeChannels->next;
+    freeChannels->prev = NULL;
+
+    channel->next = NULL;
+    return channel;
 }

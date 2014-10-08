@@ -3,7 +3,7 @@
  *
  * Socket-relay.
  * ----------
- *  Simple relay server.
+ *  Simple relay relay.
  */
 
 #include <stdlib.h>
@@ -26,23 +26,25 @@ const char *HELP    = "Usage: socket-relay [options]\n\n\
     -v --verbose                        Increase verbosity level.\n\
     -d --debug LEVEL[=info]             Set verbosity level to LEVEL [error, warning, info, notice, debug].\n\
     -l --log FILE[=stderr]              Set log file.\n\
+    -c --relay HOST[=localhost]         Address of the relay.\n\
+    -s --host HOST[=localhost]          Destination address.\n\
     -p --control-port PORT[=10000]      Control port of the relay.\n\
     -q --connection-port PORT[=10001]   Connection port of the relay.\n\
-    -r --relay-ports PORTS              Relay ports.\n\
     -a --auth TOKEN[=1234]              Auth token.";
 
-const char *SHORT_OPTIONS           = "hVvd:l:p:q:r:a:";
+const char *SHORT_OPTIONS           = "hVvd:l:c:s:p:q:a:";
 const struct option LONG_OPTIONS[] =
 {
-    {"help",            no_argument,        0, 'h'}, // display help and usage information
-    {"version",         no_argument,        0, 'V'}, // display version
-    {"verbose",         no_argument,        0, 'v'}, // set log level to notice
-    {"debug",           required_argument,  0, 'd'}, // manually set log level [error, warning, info, notice, debug]
-    {"log",             required_argument,  0, 'l'}, // set log file
-    {"control-port",    required_argument,  0, 'p'}, // relay control port
-    {"connection-port", required_argument,  0, 'q'}, // relay connection port
-    {"relay-ports",     required_argument,  0, 'r'}, // relay ports
-    {"auth",            required_argument,  0, 'a'}, // relay auth token
+    {"help",            no_argument,        NULL,   'h'}, // display help and usage information
+    {"version",         no_argument,        NULL,   'V'}, // display version
+    {"verbose",         no_argument,        NULL,   'v'}, // set log level to notice
+    {"debug",           required_argument,  NULL,   'd'}, // manually set log level [error, warning, info, notice, debug]
+    {"log",             required_argument,  NULL,   'l'}, // set log file
+    {"relay",           required_argument,  NULL,   'c'}, // relay address
+    {"host",            required_argument,  NULL,   's'}, // destination address
+    {"control-port",    required_argument,  NULL,   'p'}, // relay control port
+    {"connection-port", required_argument,  NULL,   'q'}, // relay connection port
+    {"auth",            required_argument,  NULL,   'a'}, // relay auth token
     {NULL, 0, 0, 0},
 };
 
@@ -52,14 +54,12 @@ SocketRelay relay = {
         10000,
         10001,
         "1234",
-        "tcp:10080:80,tcp:10022:22",
     },
+    "localhost",
     {
         {0, {"", NULL, NULL}},
         0,
         0,
-        0,
-        {},
     },
     NULL,
     {LOG_INFO, 0},
@@ -83,7 +83,7 @@ int32_t main(int32_t argc, char **argv)
     signal(SIGKILL, sigbreak);
     int32_t o;
 
-    while((o = getopt_long(argc, argv, SHORT_OPTIONS, LONG_OPTIONS, 0)) != -1) switch(o)
+    while((o = getopt_long(argc, argv, SHORT_OPTIONS, LONG_OPTIONS, NULL)) != -1) switch(o)
     {
         case 'h': puts(HELP);
             return 0;
@@ -106,6 +106,12 @@ int32_t main(int32_t argc, char **argv)
         case 'l': logfile = optarg;
             break;
 
+        case 'c': relay.control.host = optarg;
+            break;
+
+        case 's': relay.destination = optarg;
+            break;
+
         case 'p': relay.control.port = atoi(optarg);
             break;
 
@@ -115,28 +121,19 @@ int32_t main(int32_t argc, char **argv)
         case 'a': relay.control.password = optarg;
             break;
 
-        case 'r': relay.control.ports = optarg;
-            break;
-
         case '?': fputs(HELP, stderr);
             return 1;
     }
 
     lOpen(&relay.log, logfile, loglevel);
-    NOTICE(&relay.log, "Socket-relay relay configured with %u, %u control ports and %s relay ports.", relay.control.port, relay.control.connectionPort, relay.control.ports);
+    NOTICE(&relay.log, "Socket-relay relay configured with %s:%u:%u relay and %s destination.", relay.control.host, relay.control.port, relay.control.connectionPort, relay.destination);
     if(!rConnect(&relay))
     {
         lClose(&relay.log);
         return 2;
     }
 
-    if(!rOpenPorts(&relay))
-    {
-        lClose(&relay.log);
-        return 3;
-    }
-
-    rListen(&relay);
+    rProcess(&relay);
     rDisconnect(&relay, "relay exit");
     lClose(&relay.log);
     return 0;
