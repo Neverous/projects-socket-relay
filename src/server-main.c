@@ -1,9 +1,9 @@
 /* 2014
  * Maciej Szeptuch (Neverous) <neverous@neverous.info>
  *
- * Socket-server.
+ * Socket-relay.
  * ----------
- *  Simple server server.
+ *  Simple relay server.
  */
 
 #include <stdlib.h>
@@ -26,23 +26,25 @@ const char *HELP    = "Usage: socket-server [options]\n\n\
     -v --verbose                        Increase verbosity level.\n\
     -d --debug LEVEL[=info]             Set verbosity level to LEVEL [error, warning, info, notice, debug].\n\
     -l --log FILE[=stderr]              Set log file.\n\
-    -p --control-port PORT[=10000]      Control port of the server.\n\
-    -q --connection-port PORT[=10001]   Connection port of the server.\n\
-    -r --server-ports PORTS              Server ports.\n\
+    -c --relay HOST[=localhost]         Address of the relay.\n\
+    -s --host HOST[=localhost]          Destination address.\n\
+    -p --control-port PORT[=10000]      Control port of the relay.\n\
+    -q --connection-port PORT[=10001]   Connection port of the relay.\n\
     -a --auth TOKEN[=1234]              Auth token.";
 
-const char *SHORT_OPTIONS           = "hVvd:l:p:q:r:a:";
+const char *SHORT_OPTIONS           = "hVvd:l:c:s:p:q:a:";
 const struct option LONG_OPTIONS[] =
 {
-    {"help",            no_argument,        0, 'h'}, // display help and usage information
-    {"version",         no_argument,        0, 'V'}, // display version
-    {"verbose",         no_argument,        0, 'v'}, // set log level to notice
-    {"debug",           required_argument,  0, 'd'}, // manually set log level [error, warning, info, notice, debug]
-    {"log",             required_argument,  0, 'l'}, // set log file
-    {"control-port",    required_argument,  0, 'p'}, // server control port
-    {"connection-port", required_argument,  0, 'q'}, // server connection port
-    {"server-ports",     required_argument,  0, 'r'}, // server ports
-    {"auth",            required_argument,  0, 'a'}, // server auth token
+    {"help",            no_argument,        NULL,   'h'}, // display help and usage information
+    {"version",         no_argument,        NULL,   'V'}, // display version
+    {"verbose",         no_argument,        NULL,   'v'}, // set log level to notice
+    {"debug",           required_argument,  NULL,   'd'}, // manually set log level [error, warning, info, notice, debug]
+    {"log",             required_argument,  NULL,   'l'}, // set log file
+    {"relay",           required_argument,  NULL,   'c'}, // relay address
+    {"host",            required_argument,  NULL,   's'}, // destination address
+    {"control-port",    required_argument,  NULL,   'p'}, // relay control port
+    {"connection-port", required_argument,  NULL,   'q'}, // relay connection port
+    {"auth",            required_argument,  NULL,   'a'}, // relay auth token
     {NULL, 0, 0, 0},
 };
 
@@ -52,14 +54,12 @@ SocketServer server = {
         10000,
         10001,
         "1234",
-        "tcp:10080:80,tcp:10022:22",
     },
+    "localhost",
     {
         {0, {"", NULL, NULL}},
         0,
         0,
-        0,
-        {},
     },
     NULL,
     {LOG_INFO, 0},
@@ -83,7 +83,7 @@ int32_t main(int32_t argc, char **argv)
     signal(SIGKILL, sigbreak);
     int32_t o;
 
-    while((o = getopt_long(argc, argv, SHORT_OPTIONS, LONG_OPTIONS, 0)) != -1) switch(o)
+    while((o = getopt_long(argc, argv, SHORT_OPTIONS, LONG_OPTIONS, NULL)) != -1) switch(o)
     {
         case 'h': puts(HELP);
             return 0;
@@ -106,6 +106,12 @@ int32_t main(int32_t argc, char **argv)
         case 'l': logfile = optarg;
             break;
 
+        case 'c': server.control.host = optarg;
+            break;
+
+        case 's': server.destination = optarg;
+            break;
+
         case 'p': server.control.port = atoi(optarg);
             break;
 
@@ -115,28 +121,19 @@ int32_t main(int32_t argc, char **argv)
         case 'a': server.control.password = optarg;
             break;
 
-        case 'r': server.control.ports = optarg;
-            break;
-
         case '?': fputs(HELP, stderr);
             return 1;
     }
 
     lOpen(&server.log, logfile, loglevel);
-    NOTICE(&server.log, "Socket-server server configured with %u, %u control ports and %s server ports.", server.control.port, server.control.connectionPort, server.control.ports);
+    NOTICE(&server.log, "Socket-relay server configured with %s:%u:%u relay and %s destination.", server.control.host, server.control.port, server.control.connectionPort, server.destination);
     if(!sConnect(&server))
     {
         lClose(&server.log);
         return 2;
     }
 
-    if(!sOpenPorts(&server))
-    {
-        lClose(&server.log);
-        return 3;
-    }
-
-    sListen(&server);
+    sProcess(&server);
     sDisconnect(&server, "server exit");
     lClose(&server.log);
     return 0;
