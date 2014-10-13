@@ -6,7 +6,7 @@ Simple socket relay server.
 Requirements
 ----------
 
-* epoll kernel module.
+* libevent
 
 Install
 ----------

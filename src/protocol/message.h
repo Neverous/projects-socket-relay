@@ -5,91 +5,162 @@
 #define __MESSAGE_H__
 
 #include <stdint.h>
-#include "auth.h"
+#include <assert.h>
+#include "authentication.h"
 
 #pragma pack(push, 1)
 
-typedef enum _msg_type
+enum MessageType
 {
-    NOP,
+    NOOP,
     PING,
     PONG,
     CHALLENGE,
     RESPONSE,
     OPEN_CHANNEL,
     CLOSE_CHANNEL,
-} MsgType; // enum MsgType
+}; // enum MessageType
 
-typedef struct _msg
+struct Message
 {
     uint8_t type;
-} Msg; // struct Msg
+}; // struct Message
 
-static_assert(sizeof(Msg) == 1, "Invalid Msg structure size");
+static_assert(sizeof(struct Message) == 1, "Invalid Message structure size!");
 
-typedef struct _msg_nop
+struct MessageNoop
 {
     uint8_t type;
-} MsgNop; // struct MsgNop
+}; // struct MessageNoop
 
-static_assert(sizeof(MsgNop) == 1, "Invalid MsgNop structure size");
+static_assert(  sizeof(struct MessageNoop) == 1,
+                "Invalid MessageNoop structure size!");
 
-typedef struct _msg_ping
-{
-    uint8_t type;
-    uint8_t seq;
-} MsgPing; // struct MsgPing
-
-static_assert(sizeof(MsgPing) == 2, "Invalid MsgPing structure size");
-
-typedef struct _msg_poing
+struct MessagePing
 {
     uint8_t type;
     uint8_t seq;
-} MsgPong; // struct MsgPong
+}; // struct MessagePing
 
-static_assert(sizeof(MsgPong) == 2, "Invalid MsgPong structure size");
+static_assert(  sizeof(struct MessagePing) == 2,
+                "Invalid MessagePing structure size!");
 
-typedef struct _msg_challenge
+struct MessagePong
 {
-    uint8_t     type;
-    AuthHash    challenge;
-} MsgChallenge; // struct MsgChallenge
+    uint8_t type;
+    uint8_t seq;
+}; // struct MessagePong
 
-static_assert(  sizeof(MsgChallenge) == 1 + sizeof(AuthHash),
-                "Invalid MsgChallenge structure size");
+static_assert(  sizeof(struct MessagePong) == 2,
+                "Invalid MessagePong structure size!");
 
-typedef struct _msg_response
+struct MessageChallenge
 {
-    uint8_t     type;
-    AuthHash    response;
-} MsgResponse; // struct MsgResponse
+    uint8_t                     type;
+    struct AuthenticationHash   challenge;
+}; // struct MessageChallenge
 
-static_assert(  sizeof(MsgResponse) == 1 + sizeof(AuthHash),
-                "Invalid MsgResponse structure size");
+static_assert(
+            sizeof(struct MessageChallenge)
+        ==  1 + sizeof(struct AuthenticationHash),
+        "Invalid MessageChallenge structure size!");
 
-typedef struct _msg_open_channel
+struct MessageResponse
 {
-    uint8_t     type;
-    AuthHash    challenge;
-    uint16_t    port;
-    uint8_t     proto;
-} MsgOpenChannel; // struct MsgOpenChannel
+    uint8_t                     type;
+    struct AuthenticationHash   response;
+}; // struct MessageResponse
 
-static_assert(  sizeof(MsgOpenChannel) == 4 + sizeof(AuthHash),
-                "Invalid MsgOpenChannel structure size");
+static_assert(
+        sizeof(struct MessageResponse) == 1 + sizeof(struct AuthenticationHash),
+        "Invalid MessageResponse structure size!");
 
-typedef struct _msg_close_channel
+struct MessageOpenChannel
 {
-    uint8_t     type;
-    AuthHash    response;
-} MsgCloseChannel; // struct MsgCloseChannel
+    uint8_t                     type;
+    struct AuthenticationHash   challenge;
+    uint16_t                    port;
+    uint8_t                     proto;
+}; // struct MessageOpenChannel
 
-static_assert(  sizeof(MsgCloseChannel) == 1 + sizeof(AuthHash),
-                "Invalid MsgCloseChannel structure size");
+static_assert(
+            sizeof(struct MessageOpenChannel)
+        ==  4 + sizeof(struct AuthenticationHash),
+        "Invalid MessageOpenChannel structure size!");
+
+struct MessageCloseChannel
+{
+    uint8_t                     type;
+    struct AuthenticationHash   response;
+}; // struct MessageCloseChannel
+
+static_assert(
+            sizeof(struct MessageCloseChannel)
+        ==  1 + sizeof(struct AuthenticationHash),
+        "Invalid MessageCloseChannel structure size!");
 
 #pragma pack(pop)
 
-const char *mGetTypeStr(uint8_t type);
+inline
+size_t message_get_size(const struct Message *msg)
+{
+    assert(msg);
+    switch(msg->type)
+    {
+        case NOOP:
+            return sizeof(struct MessageNoop);
+
+        case PING:
+            return sizeof(struct MessagePing);
+
+        case PONG:
+            return sizeof(struct MessagePong);
+
+        case CHALLENGE:
+            return sizeof(struct MessageChallenge);
+
+        case RESPONSE:
+            return sizeof(struct MessageResponse);
+
+        case OPEN_CHANNEL:
+            return sizeof(struct MessageOpenChannel);
+
+        case CLOSE_CHANNEL:
+            return sizeof(struct MessageCloseChannel);
+    }
+
+    return -1; // INVALID
+}
+
+inline
+const char *message_get_type_string(const struct Message *msg)
+{
+    assert(msg);
+    switch(msg->type)
+    {
+        case NOOP:
+            return "No-op";
+
+        case PING:
+            return "Ping";
+
+        case PONG:
+            return "Pong";
+
+        case CHALLENGE:
+            return "Challenge";
+
+        case RESPONSE:
+            return "Response";
+
+        case OPEN_CHANNEL:
+            return "Open Channel";
+
+        case CLOSE_CHANNEL:
+            return "Close Channel";
+    }
+
+    return "Invalid"; // INVALID
+}
 
 #endif // __MESSAGE_H__

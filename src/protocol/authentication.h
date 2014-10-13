@@ -1,0 +1,102 @@
+/* 2014
+ * Maciej Szeptuch (neverous) <neverous@neverous.info>
+ */
+#ifndef __AUTHENTICATION_H__
+#define __AUTHENTICATION_H__
+
+#include <stdint.h>
+#include <assert.h>
+#include <string.h>
+#include <event2/util.h>
+#include "sha2.h"
+
+#define CHALLENGE_LENGTH    32
+#define SECRET_BYTE         17
+
+#pragma pack(push, 1)
+
+struct AuthenticationHash
+{
+    uint8_t hash[CHALLENGE_LENGTH];
+}; // struct AthenticationHash
+
+static_assert(  sizeof(struct AuthenticationHash) == CHALLENGE_LENGTH,
+                "Invalid AuthenticationHash structure size!");
+
+#pragma pack(pop)
+
+inline
+uint8_t authentication_get_secret_byte(const struct AuthenticationHash *token)
+{
+    return token->hash[SECRET_BYTE];
+}
+
+inline
+uint8_t *authentication_encode_buffer(  uint8_t *buffer,
+                                        uint32_t size,
+                                        uint8_t secret)
+{
+    // FIXME
+    uint8_t *cur = buffer;
+    for(uint32_t b = 0; b < size; ++ b, ++ cur)
+        *cur ^= secret;
+
+    return buffer;
+}
+
+inline
+uint8_t *authentication_decode_buffer(  uint8_t *buffer,
+                                        uint32_t size,
+                                        uint8_t secret)
+{
+    // FIXME
+    uint8_t *cur = buffer;
+    for(uint32_t b = 0; b < size; ++ b, ++ cur)
+        *cur ^= secret;
+
+    return buffer;
+}
+
+inline
+uint8_t authentication_compare_hash(const struct AuthenticationHash *first,
+                                    const struct AuthenticationHash *second)
+{
+    return memcmp(first->hash, second->hash, CHALLENGE_LENGTH) == 0;
+}
+
+inline
+uint8_t authentication_prepare_response(
+        struct AuthenticationHash *response,
+        const struct AuthenticationHash *challenge,
+        const char *password,
+        uint8_t secret)
+{
+    int32_t passlen = strlen(password);
+    assert(passlen < 256);
+    assert(CHALLENGE_LENGTH <= SHA256_DIGEST_SIZE);
+
+    uint8_t digest[SHA256_DIGEST_SIZE];
+    uint8_t message[CHALLENGE_LENGTH + 256];
+
+    memcpy(message, password, passlen);
+    memcpy(message + passlen, challenge->hash, CHALLENGE_LENGTH);
+    sha256(message, CHALLENGE_LENGTH + passlen, digest);
+    memcpy(response->hash, digest, CHALLENGE_LENGTH);
+    /*authentication_encode_buffer(
+        response->hash,
+        CHALLENGE_LENGTH,
+        authentication_get_secret_byte(challenge));
+    */
+    return 1;
+
+}
+
+inline
+uint8_t authentication_prepare_challenge(struct AuthenticationHash *challenge)
+{
+    evutil_secure_rng_get_bytes(challenge->hash, CHALLENGE_LENGTH);
+    return 1;
+}
+
+#endif // __AUTHENTICATION_H__
+
