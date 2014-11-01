@@ -50,8 +50,8 @@ const struct option LONG_OPTIONS[] =
 struct Options
 {
     int16_t     control_port;
-    const char  *password;
     const char  *relay_ports;
+    const char  *password;
 } options = {
     10000,
     "tcp:10080:80,tcp:10022:22",
@@ -72,9 +72,12 @@ struct Context
     struct Channel              *free_channels;
 
     struct RelayListener        *relays;
+    uint16_t                    relays_count;
 } context;
 
 // SIMPLE LOGGING
+inline
+static
 void debug(const char *fmt, ...)
 {
     char buffer[32];
@@ -117,7 +120,7 @@ void read_control_connection(struct bufferevent *buffevent, void *args);
 
 inline
 static
-void process_control_messages(  struct bufferevent *buffevent,
+void process_control_message(   struct bufferevent *buffevent,
                                 struct Message *msg);
 
 static
@@ -183,10 +186,10 @@ void allocate_data_channels(void);
 
 inline
 static
-void request_data_channel(  struct bufferevent *buffevent,
-                            struct sockaddr *address,
-                            uint8_t server_proto,
-                            uint16_t server_port);
+struct Channel *request_data_channel(   struct bufferevent *buffevent,
+                                        struct sockaddr *address,
+                                        uint8_t server_proto,
+                                        uint16_t server_port);
 
 inline
 static
@@ -252,6 +255,7 @@ int32_t main(int32_t argc, char **argv)
     evconnlistener_set_error_cb(    context.listener,
                                     error_on_control_connection_listener);
 
+    debug("working...");
     event_base_dispatch(context.events);
     return 0;
 }
@@ -261,7 +265,7 @@ static
 void accept_control_connection( struct evconnlistener *listener,
                                 evutil_socket_t fd,
                                 struct sockaddr *address,
-                                int socklet,
+                                int socklen,
                                 void *args)
 {
     debug("got control connection");
@@ -299,11 +303,10 @@ void setup_control_connection(struct bufferevent *buffevent)
 {
     struct MessageChallenge cha;
     cha.type = CHALLENGE;
-    authentication_prepare_challenge(&context.challenge);
-    memcpy(&cha.challenge, &context.challenge, CHALLENGE_LENGTH);
-    context.secret = authentication_get_secret_byte(&context.challenge);
+    authentication_prepare_challenge(&cha.challenge);
+    context.secret = authentication_get_secret_byte(&cha.challenge);
     authentication_prepare_response(    &context.challenge,
-                                        &context.challenge,
+                                        &cha.challenge,
                                         options.password,
                                         context.secret);
     bufferevent_write(  buffevent,
@@ -331,7 +334,7 @@ void authenticate_control_connection(struct bufferevent *buffevent, void *args)
 
     size_t len      = evbuffer_get_length(input);
     size_t wanted   = sizeof(struct MessageResponse);
-    if(len < sizeof(struct MessageResponse))
+    if(len < wanted)
         return;
 
     struct MessageResponse *res =
@@ -342,7 +345,6 @@ void authenticate_control_connection(struct bufferevent *buffevent, void *args)
         debug(  "authentication: invalid message type %s",
                 message_get_type_string((struct Message *) res));
 
-        bufferevent_free(buffevent);
         teardown_control_connection();
         return;
     }
@@ -350,7 +352,6 @@ void authenticate_control_connection(struct bufferevent *buffevent, void *args)
     if(!authentication_compare_hash(&context.challenge, &res->response))
     {
         debug("authentication: authentication failed");
-        bufferevent_free(buffevent);
         teardown_control_connection();
         return;
     }
@@ -364,9 +365,10 @@ void authenticate_control_connection(struct bufferevent *buffevent, void *args)
         options.password,
         context.secret);
 
-    bufferevent_write(buffevent,
-                    &res2,
-                    sizeof(res2));
+    evbuffer_drain(input, wanted);
+    bufferevent_write(  buffevent,
+                        &res2,
+                        sizeof(res2));
 
     bufferevent_setcb(  buffevent,
                         read_control_connection,
@@ -390,23 +392,24 @@ void read_control_connection(struct bufferevent *buffevent, void *args)
         size_t wanted = message_get_size(
             (struct Message *) evbuffer_pullup(input, sizeof(struct Message)));
 
-        if(wanted < len) // Not enough data
+        if(wanted > len) // Not enough data
             break;
 
-        process_control_messages(
+        process_control_message(
             buffevent,
             (struct Message *) evbuffer_pullup(input, wanted));
 
         evbuffer_drain(input, wanted);
+        len -= wanted;
     }
 }
 
 inline
 static
-void process_control_messages(  struct bufferevent *buffevent,
+void process_control_message(   struct bufferevent *buffevent,
                                 struct Message *msg)
 {
-    debug("processing control messages");
+    debug("processing control message");
     switch(msg->type)
     {
         case NOOP:
@@ -432,7 +435,7 @@ void process_control_messages(  struct bufferevent *buffevent,
                 struct MessagePong *pong = (struct MessagePong *) msg;
                 if(context.ping.seq != pong->seq)
                 {
-                    debug   ("invalid pong received seq:%d (vs %d)",
+                    debug(  "invalid pong received seq:%d (vs %d)",
                             pong->seq, context.ping.seq);
                 }
             }
@@ -457,12 +460,11 @@ void error_on_control_connection_bufferevent(   struct bufferevent *buffevent,
                                                 void *args)
 {
     if(events & BEV_EVENT_ERROR)
-        perror("bufferrevent");
+        perror("bufferevent");
 
     if(events & (BEV_EVENT_EOF | BEV_EVENT_ERROR))
     {
         debug("control end of data");
-        bufferevent_free(buffevent);
         teardown_control_connection();
     }
 }
@@ -474,7 +476,9 @@ void teardown_control_connection(void)
     // disconnect everything and close...
     teardown_relay_connections();
 
+    bufferevent_free(context.control_buffers);
     evconnlistener_free(context.listener);
+    context.listener = 0;
 }
 
 static
@@ -570,7 +574,6 @@ void error_on_data_connection_bufferevent(  struct bufferevent *buffevent,
     if(events & (BEV_EVENT_EOF | BEV_EVENT_ERROR))
     {
         debug("data connection end of data");
-        bufferevent_free(buffevent);
         teardown_data_channel((struct Channel *) data_channel, 1);
     }
 }
@@ -579,16 +582,15 @@ inline
 static
 void setup_relay_connections(void)
 {
-    int c;
     const char *w = options.relay_ports;
-    for(c = 0; w[c]; w[c] == ',' ? ++ c : *w++);
+    for(context.relays_count = 0; w[context.relays_count]; w[context.relays_count] == ',' ? ++ context.relays_count : *w++);
 
     context.relays =
-        (struct RelayListener *) malloc(c * sizeof(struct RelayListener));
+        (struct RelayListener *) malloc(context.relays_count * sizeof(struct RelayListener));
 
     w = options.relay_ports;
     struct RelayListener *cur = context.relays;
-    while(c -- > 0)
+    for(int c = 0; c < context.relays_count; ++ c)
     {
         char        proto[4];
         uint16_t    port_from;
@@ -634,10 +636,11 @@ void teardown_relay_connections(void)
 {
     debug("relays teardown");
     struct RelayListener *cur = context.relays;
-    while(cur)
+    for(int c = 0; c < context.relays_count; ++ c)
     {
         assert(cur->proto == 1);
         evconnlistener_free(cur->tcp_listener);
+        cur->tcp_listener = 0;
         cur->proto = 0;
         ++ cur;
     }
@@ -669,17 +672,16 @@ void accept_relay_connection(   struct evconnlistener *listener,
     }
 
     bufferevent_setwatermark(buffevent, EV_READ, 0, 4096);
+    bufferevent_enable(buffevent, EV_READ | EV_WRITE);
+
+    struct RelayListener *relay = (struct RelayListener *) relay_listener;
+    struct Channel *channel = request_data_channel(buffevent, address, relay->proto, relay->port);
     bufferevent_setcb(
         buffevent,
         NULL,
         NULL,
         error_on_relay_connection_bufferevent,
-        NULL);
-
-    bufferevent_enable(buffevent, EV_READ | EV_WRITE);
-
-    struct RelayListener *relay = (struct RelayListener *) relay_listener;
-    request_data_channel(buffevent, address, relay->proto, relay->port);
+        channel);
 }
 
 static
@@ -715,7 +717,6 @@ void error_on_relay_connection_bufferevent( struct bufferevent *buffevent,
     if(events & (BEV_EVENT_EOF | BEV_EVENT_ERROR))
     {
         debug("relay connection end of data");
-        bufferevent_free(buffevent);
         teardown_data_channel((struct Channel *) data_channel, 1);
     }
 }
@@ -744,10 +745,10 @@ void allocate_data_channels(void)
 
 inline
 static
-void request_data_channel(  struct bufferevent *buffevent,
-                            struct sockaddr *address,
-                            uint8_t server_proto,
-                            uint16_t server_port)
+struct Channel *request_data_channel(   struct bufferevent *buffevent,
+                                        struct sockaddr *address,
+                                        uint8_t server_proto,
+                                        uint16_t server_port)
 {
     if(!context.free_channels)
         allocate_data_channels();
@@ -757,6 +758,7 @@ void request_data_channel(  struct bufferevent *buffevent,
     context.free_channels = context.free_channels->next;
     context.free_channels->prev = NULL;
 
+    memset(channel, 0, sizeof(struct Channel));
     channel->next = context.channels;
     if(context.channels)
         context.channels->prev = channel;
@@ -780,6 +782,8 @@ void request_data_channel(  struct bufferevent *buffevent,
                                     &channel->token,
                                     options.password,
                                     context.secret);
+
+    return channel;
 }
 
 inline
@@ -787,7 +791,7 @@ static
 void setup_data_channel(struct Channel *channel, struct bufferevent *buffevent)
 {
     channel->server_buffers = buffevent;
-    bufferevent_setcb(  channel->peer_buffers,
+    bufferevent_setcb(  buffevent,
                         read_relay_connection,
                         NULL,
                         error_on_relay_connection_bufferevent,
@@ -798,14 +802,29 @@ inline
 static
 void teardown_data_channel(struct Channel *channel, uint8_t close_channel)
 {
+    assert(channel);
+    debug("data channel teardown");
+    if(context.channels == channel)
+        context.channels = channel->next;
+
     if(channel->prev)
         channel->prev->next = channel->next;
 
     if(channel->next)
         channel->next->prev = channel->prev;
 
-    bufferevent_free(channel->server_buffers);
-    bufferevent_free(channel->peer_buffers);
+    if(channel->server_buffers)
+    {
+        bufferevent_free(channel->server_buffers);
+        channel->server_buffers = 0;
+    }
+
+    if(channel->peer_buffers)
+    {
+        bufferevent_free(channel->peer_buffers);
+        channel->peer_buffers = 0;
+    }
+
     channel->prev = NULL;
     channel->next = context.free_channels;
     if(context.free_channels)
@@ -821,6 +840,9 @@ void teardown_data_channel(struct Channel *channel, uint8_t close_channel)
         struct MessageCloseChannel clo;
         clo.type = CLOSE_CHANNEL;
         memcpy(&clo.response, &channel->token, CHALLENGE_LENGTH);
+        bufferevent_write(  context.control_buffers,
+                            &clo,
+                            sizeof(clo));
     }
 }
 

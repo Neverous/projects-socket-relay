@@ -102,6 +102,7 @@ static_assert(
 #pragma pack(pop)
 
 inline
+static
 size_t message_get_size(const struct Message *msg)
 {
     assert(msg);
@@ -133,6 +134,7 @@ size_t message_get_size(const struct Message *msg)
 }
 
 inline
+static
 const char *message_get_type_string(const struct Message *msg)
 {
     assert(msg);

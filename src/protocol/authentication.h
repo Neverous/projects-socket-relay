@@ -26,12 +26,14 @@ static_assert(  sizeof(struct AuthenticationHash) == CHALLENGE_LENGTH,
 #pragma pack(pop)
 
 inline
+static
 uint8_t authentication_get_secret_byte(const struct AuthenticationHash *token)
 {
     return token->hash[SECRET_BYTE];
 }
 
 inline
+static
 uint8_t *authentication_encode_buffer(  uint8_t *buffer,
                                         uint32_t size,
                                         uint8_t secret)
@@ -45,6 +47,7 @@ uint8_t *authentication_encode_buffer(  uint8_t *buffer,
 }
 
 inline
+static
 uint8_t *authentication_decode_buffer(  uint8_t *buffer,
                                         uint32_t size,
                                         uint8_t secret)
@@ -58,6 +61,7 @@ uint8_t *authentication_decode_buffer(  uint8_t *buffer,
 }
 
 inline
+static
 uint8_t authentication_compare_hash(const struct AuthenticationHash *first,
                                     const struct AuthenticationHash *second)
 {
@@ -65,6 +69,7 @@ uint8_t authentication_compare_hash(const struct AuthenticationHash *first,
 }
 
 inline
+static
 uint8_t authentication_prepare_response(
         struct AuthenticationHash *response,
         const struct AuthenticationHash *challenge,
@@ -92,6 +97,7 @@ uint8_t authentication_prepare_response(
 }
 
 inline
+static
 uint8_t authentication_prepare_challenge(struct AuthenticationHash *challenge)
 {
     evutil_secure_rng_get_bytes(challenge->hash, CHALLENGE_LENGTH);
