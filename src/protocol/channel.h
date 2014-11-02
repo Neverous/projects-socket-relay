@@ -17,6 +17,8 @@ struct Channel
 
     struct Channel              *next;
     struct Channel              *prev;
+
+    uint8_t                     marked;
 }; // struct Channel
 
 #pragma pack(pop)

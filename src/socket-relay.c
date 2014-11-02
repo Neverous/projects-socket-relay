@@ -209,6 +209,12 @@ struct Channel *find_data_channel(const struct AuthenticationHash *token);
 static
 void keepalive(evutil_socket_t fd, short event, void *arg);
 
+static
+void display_stats(evutil_socket_t fd, short event, void *arg);
+
+static
+void cleanup_channels(evutil_socket_t fd, short event, void *arg);
+
 int32_t main(int32_t argc, char **argv)
 {
     int32_t o;
@@ -272,8 +278,34 @@ int32_t main(int32_t argc, char **argv)
 
     event_add(context.keepalive, &five_seconds);
 
+    struct timeval thirty_seconds = { 30, 0 };
+    struct event *stats = event_new(context.events,
+                                    -1,
+                                    EV_TIMEOUT | EV_PERSIST,
+                                    display_stats,
+                                    NULL);
+
+    event_add(stats, &thirty_seconds);
+
+    struct timeval ten_seconds = { 10, 0 };
+    struct event *cleanup = event_new(  context.events,
+                                        -1,
+                                        EV_TIMEOUT | EV_PERSIST,
+                                        cleanup_channels,
+                                        NULL);
+
+    event_add(cleanup, &ten_seconds);
+
     debug("working...");
     event_base_dispatch(context.events);
+
+    event_del(stats);
+    event_free(stats);
+    stats = 0;
+
+    event_del(cleanup);
+    event_free(cleanup);
+    cleanup = 0;
 
     event_del(context.keepalive);
     event_free(context.keepalive);
@@ -905,4 +937,59 @@ void keepalive(evutil_socket_t fd, short event, void *arg)
                         sizeof(context.msg_alive));
 
     context.alive = 0;
+}
+
+static
+void display_stats(evutil_socket_t fd, short event, void *arg)
+{
+    assert(event & EV_TIMEOUT);
+
+    uint32_t    used_channels   = 0;
+    uint32_t    marked_channels = 0;
+    uint32_t    free_channels   = 0;
+    for(struct Channel *cur = context.channels; cur; cur = cur->next)
+    {
+        ++ used_channels;
+        if(cur->marked == 1)
+            marked_channels += cur->marked;
+    }
+
+    for(struct Channel *cur = context.free_channels; cur; cur = cur->next)
+        ++ free_channels;
+
+    debug("STATS: Channels used/marked: %u/%u, free: %u", used_channels, marked_channels, free_channels);
+}
+
+static
+void cleanup_channels(evutil_socket_t fd, short event, void *arg)
+{
+    assert(event & EV_TIMEOUT);
+    debug("cleaning up channels");
+
+    for(struct Channel *cur = context.channels; cur;)
+    {
+        if(cur->marked == 2)
+            cur = cur->next;
+
+        else if(cur->server_buffers && cur->peer_buffers)
+        {
+            cur->marked = 2;
+            cur = cur->next;
+        }
+
+        else if(cur->marked == 1)
+        {
+            debug("removing stalled channel");
+            struct Channel *next = cur->next;
+            teardown_data_channel(cur, 1);
+            cur = next;
+        }
+
+        else
+        {
+            assert(cur->marked == 0);
+            cur->marked = 1;
+            cur = cur->next;
+        }
+    }
 }
