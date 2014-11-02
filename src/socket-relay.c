@@ -488,13 +488,33 @@ void process_control_message(   struct bufferevent *buffevent,
             }
             break;
 
+        case CLOSE_CHANNEL:
+            {
+                struct MessageCloseChannel *clo =
+                    (struct MessageCloseChannel *) msg;
+
+                debug("CLOSE_CHANNEL");
+                struct Channel *channel = find_data_channel(&clo->response);
+                if(!channel)
+                    debug("channel already closed?");
+
+                else
+                    teardown_data_channel(channel, 0);
+            }
+            break;
+
         case CHALLENGE:
         case RESPONSE:
+            {
+                debug(  "not yet implemented message received (%s)",
+                        message_get_type_string(msg));
+            }
+            break;
+
         case OPEN_CHANNEL:
-        case CLOSE_CHANNEL:
         default:
             {
-                debug(  "Not yet implemented message received (%s)",
+                debug(  "invalid message received (%s)",
                         message_get_type_string(msg));
             }
             break;
