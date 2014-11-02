@@ -759,7 +759,7 @@ void read_relay_connection(struct bufferevent *buffevent, void *data_channel)
     struct Channel *current = (struct Channel *) data_channel;
     struct evbuffer *input  = bufferevent_get_input(buffevent);
 
-    bufferevent_write_buffer(current->server_buffers, input);
+    bufferevent_write_buffer(current->channel_buffers, input);
 }
 
 static
@@ -846,7 +846,7 @@ inline
 static
 void setup_data_channel(struct Channel *channel, struct bufferevent *buffevent)
 {
-    channel->server_buffers = buffevent;
+    channel->channel_buffers = buffevent;
     bufferevent_setcb(  buffevent,
                         read_relay_connection,
                         NULL,
@@ -869,10 +869,10 @@ void teardown_data_channel(struct Channel *channel, uint8_t close_channel)
     if(channel->next)
         channel->next->prev = channel->prev;
 
-    if(channel->server_buffers)
+    if(channel->channel_buffers)
     {
-        bufferevent_free(channel->server_buffers);
-        channel->server_buffers = 0;
+        bufferevent_free(channel->channel_buffers);
+        channel->channel_buffers = 0;
     }
 
     if(channel->peer_buffers)
@@ -971,7 +971,7 @@ void cleanup_channels(evutil_socket_t fd, short event, void *arg)
         if(cur->marked == 2)
             cur = cur->next;
 
-        else if(cur->server_buffers && cur->peer_buffers)
+        else if(cur->channel_buffers && cur->peer_buffers)
         {
             cur->marked = 2;
             cur = cur->next;

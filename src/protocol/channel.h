@@ -12,7 +12,7 @@
 struct Channel
 {
     struct AuthenticationHash   token;
-    struct bufferevent          *server_buffers;
+    struct bufferevent          *channel_buffers;
     struct bufferevent          *peer_buffers;
 
     struct Channel              *next;
