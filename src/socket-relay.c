@@ -66,7 +66,9 @@ struct Context
 
     struct AuthenticationHash   challenge;
     uint8_t                     secret;
-    struct MessagePing          ping;
+    struct MessageAlive         msg_alive;
+    uint8_t                     alive;
+    struct event                *keepalive;
 
     struct Channel              *channels;
     struct Channel              *free_channels;
@@ -203,6 +205,10 @@ inline
 static
 struct Channel *find_data_channel(const struct AuthenticationHash *token);
 
+// KEEPALIVE
+static
+void keepalive(evutil_socket_t fd, short event, void *arg);
+
 int32_t main(int32_t argc, char **argv)
 {
     int32_t o;
@@ -255,8 +261,23 @@ int32_t main(int32_t argc, char **argv)
     evconnlistener_set_error_cb(    context.listener,
                                     error_on_control_connection_listener);
 
+    struct timeval five_seconds = { 5, 0 };
+    context.msg_alive.type = ALIVE;
+    context.alive = 1;
+    context.keepalive = event_new(  context.events,
+                                    -1,
+                                    EV_TIMEOUT | EV_PERSIST,
+                                    keepalive,
+                                    NULL);
+
+    event_add(context.keepalive, &five_seconds);
+
     debug("working...");
     event_base_dispatch(context.events);
+
+    event_del(context.keepalive);
+    event_free(context.keepalive);
+    context.keepalive = 0;
     return 0;
 }
 
@@ -402,6 +423,11 @@ void read_control_connection(struct bufferevent *buffevent, void *args)
         evbuffer_drain(input, wanted);
         len -= wanted;
     }
+
+    context.alive = 1;
+    struct timeval five_seconds = { 5, 0 };
+    event_del(context.keepalive);
+    event_add(context.keepalive, &five_seconds);
 }
 
 inline
@@ -416,27 +442,16 @@ void process_control_message(   struct bufferevent *buffevent,
             debug("NOOP");
             break;
 
-        case PING:
+        case ALIVE:
             {
-                debug("PING");
-                struct MessagePing *ping = (struct MessagePing *) msg;
-                struct MessagePong pong;
-                pong.type = PONG;
-                pong.seq = ping->seq;
-                bufferevent_write(  buffevent,
-                                    &pong,
-                                    sizeof(pong));
-            }
-            break;
-
-        case PONG:
-            {
-                debug("PONG");
-                struct MessagePong *pong = (struct MessagePong *) msg;
-                if(context.ping.seq != pong->seq)
+                struct MessageAlive *ali = (struct MessageAlive *) msg;
+                debug("ALIVE %d", ali->seq);
+                if(context.msg_alive.seq != ali->seq)
                 {
-                    debug(  "invalid pong received seq:%d (vs %d)",
-                            pong->seq, context.ping.seq);
+                    context.msg_alive.seq = ali->seq;
+                    bufferevent_write(  buffevent,
+                                        &context.msg_alive,
+                                        sizeof(context.msg_alive));
                 }
             }
             break;
@@ -477,8 +492,11 @@ void teardown_control_connection(void)
     teardown_relay_connections();
 
     bufferevent_free(context.control_buffers);
+    context.control_buffers = 0;
     evconnlistener_free(context.listener);
     context.listener = 0;
+
+    event_base_loopexit(context.events, NULL);
 }
 
 static
@@ -583,10 +601,13 @@ static
 void setup_relay_connections(void)
 {
     const char *w = options.relay_ports;
-    for(context.relays_count = 0; w[context.relays_count]; w[context.relays_count] == ',' ? ++ context.relays_count : *w++);
+    for(context.relays_count = 0;
+        w[context.relays_count];
+        w[context.relays_count] == ',' ? ++ context.relays_count : *w++);
 
     context.relays =
-        (struct RelayListener *) malloc(context.relays_count * sizeof(struct RelayListener));
+        (struct RelayListener *) malloc(
+            context.relays_count * sizeof(struct RelayListener));
 
     w = options.relay_ports;
     struct RelayListener *cur = context.relays;
@@ -675,7 +696,10 @@ void accept_relay_connection(   struct evconnlistener *listener,
     bufferevent_enable(buffevent, EV_READ | EV_WRITE);
 
     struct RelayListener *relay = (struct RelayListener *) relay_listener;
-    struct Channel *channel = request_data_channel(buffevent, address, relay->proto, relay->port);
+    struct Channel *channel = request_data_channel( buffevent,
+                                                    address,
+                                                    relay->proto,
+                                                    relay->port);
     bufferevent_setcb(
         buffevent,
         NULL,
@@ -855,4 +879,30 @@ struct Channel *find_data_channel(const struct AuthenticationHash *token)
         cur = cur->next;
 
     return cur;
+}
+
+static
+void keepalive(evutil_socket_t fd, short event, void *arg)
+{
+    assert(event & EV_TIMEOUT);
+    if(!context.control_buffers)
+    {
+        debug("no connection");
+        return;
+    }
+
+    if(!context.alive)
+    {
+        debug("connection down");
+        teardown_control_connection();
+        return;
+    }
+
+    debug("sending alive");
+    ++ context.msg_alive.seq;
+    bufferevent_write(  context.control_buffers,
+                        &context.msg_alive,
+                        sizeof(context.msg_alive));
+
+    context.alive = 0;
 }

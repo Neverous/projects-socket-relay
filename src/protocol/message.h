@@ -13,8 +13,7 @@
 enum MessageType
 {
     NOOP,
-    PING,
-    PONG,
+    ALIVE,
     CHALLENGE,
     RESPONSE,
     OPEN_CHANNEL,
@@ -36,23 +35,14 @@ struct MessageNoop
 static_assert(  sizeof(struct MessageNoop) == 1,
                 "Invalid MessageNoop structure size!");
 
-struct MessagePing
+struct MessageAlive
 {
     uint8_t type;
     uint8_t seq;
-}; // struct MessagePing
+}; // struct MessageAlive
 
-static_assert(  sizeof(struct MessagePing) == 2,
-                "Invalid MessagePing structure size!");
-
-struct MessagePong
-{
-    uint8_t type;
-    uint8_t seq;
-}; // struct MessagePong
-
-static_assert(  sizeof(struct MessagePong) == 2,
-                "Invalid MessagePong structure size!");
+static_assert(  sizeof(struct MessageAlive) == 2,
+                "Invalid MessageAlive structure size!");
 
 struct MessageChallenge
 {
@@ -111,11 +101,8 @@ size_t message_get_size(const struct Message *msg)
         case NOOP:
             return sizeof(struct MessageNoop);
 
-        case PING:
-            return sizeof(struct MessagePing);
-
-        case PONG:
-            return sizeof(struct MessagePong);
+        case ALIVE:
+            return sizeof(struct MessageAlive);
 
         case CHALLENGE:
             return sizeof(struct MessageChallenge);
@@ -143,11 +130,8 @@ const char *message_get_type_string(const struct Message *msg)
         case NOOP:
             return "No-op";
 
-        case PING:
-            return "Ping";
-
-        case PONG:
-            return "Pong";
+        case ALIVE:
+            return "Alive";
 
         case CHALLENGE:
             return "Challenge";

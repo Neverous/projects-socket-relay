@@ -70,7 +70,9 @@ struct Context
 
     struct AuthenticationHash   challenge;
     uint8_t                     secret;
-    struct MessagePing          ping;
+    struct MessageAlive         msg_alive;
+    uint8_t                     alive;
+    struct event                *keepalive;
 
     struct Channel              *channels;
     struct Channel              *free_channels;
@@ -123,7 +125,9 @@ inline
 static
 void teardown_control_connection(void);
 
-// ...
+// KEEPALIVE
+static
+void keepalive(evutil_socket_t fd, short event, void *arg);
 
 int32_t main(int32_t argc, char **argv)
 {
@@ -193,8 +197,23 @@ int32_t main(int32_t argc, char **argv)
         options.relay_host,
         options.control_port);
 
+    struct timeval timeout = { 30, 0 };
+    context.msg_alive.type = ALIVE;
+    context.alive = 1;
+    context.keepalive = event_new(  context.events,
+                                    -1,
+                                    EV_TIMEOUT | EV_PERSIST,
+                                    keepalive,
+                                    NULL);
+
+    event_add(context.keepalive, &timeout);
+
     debug("working...");
     event_base_dispatch(context.events);
+
+    event_del(context.keepalive);
+    event_free(context.keepalive);
+    context.keepalive = 0;
     return 0;
 }
 
@@ -217,7 +236,6 @@ void authenticate_control_connection(struct bufferevent *buffevent, void *args)
         debug(  "authentication: invalid message type %s",
                 message_get_type_string((struct Message *) cha));
 
-        bufferevent_free(buffevent);
         teardown_control_connection();
         return;
     }
@@ -271,7 +289,6 @@ void authenticate_relay_control_connection( struct bufferevent *buffevent,
         debug(  "relay authentication: invalid message type %s",
                 message_get_type_string((struct Message *) res));
 
-        bufferevent_free(buffevent);
         teardown_control_connection();
         return;
     }
@@ -279,7 +296,6 @@ void authenticate_relay_control_connection( struct bufferevent *buffevent,
     if(!authentication_compare_hash(&context.challenge, &res->response))
     {
         debug("relay authentication: authentication failed");
-        bufferevent_free(buffevent);
         teardown_control_connection();
         return;
     }
@@ -318,6 +334,11 @@ void read_control_connection(struct bufferevent *buffevent, void *args)
         evbuffer_drain(input, wanted);
         len -= wanted;
     }
+
+    context.alive = 1;
+    struct timeval five_seconds = { 5, 0 };
+    event_del(context.keepalive);
+    event_add(context.keepalive, &five_seconds);
 }
 
 inline
@@ -332,27 +353,16 @@ void process_control_message(   struct bufferevent *buffevent,
             debug("NOOP");
             break;
 
-        case PING:
+        case ALIVE:
             {
-                debug("PING");
-                struct MessagePing *ping = (struct MessagePing *) msg;
-                struct MessagePong pong;
-                pong.type = PONG;
-                pong.seq = ping->seq;
-                bufferevent_write(  buffevent,
-                                    &pong,
-                                    sizeof(pong));
-            }
-            break;
-
-        case PONG:
-            {
-                debug("PONG");
-                struct MessagePong *pong = (struct MessagePong *) msg;
-                if(context.ping.seq != pong->seq)
+                struct MessageAlive *ali = (struct MessageAlive *) msg;
+                debug("ALIVE %d", ali->seq);
+                if(context.msg_alive.seq != ali->seq)
                 {
-                    debug(  "invalid pong seq:%d (vs %d)",
-                            pong->seq, context.ping.seq);
+                    context.msg_alive.seq = ali->seq;
+                    bufferevent_write(  buffevent,
+                                        &context.msg_alive,
+                                        sizeof(context.msg_alive));
                 }
             }
             break;
@@ -381,7 +391,6 @@ void error_on_control_connection_bufferevent(   struct bufferevent *buffevent,
     if(events & (BEV_EVENT_EOF | BEV_EVENT_ERROR))
     {
         debug("control end of data");
-        bufferevent_free(buffevent);
         teardown_control_connection();
     }
 }
@@ -390,6 +399,32 @@ inline
 static
 void teardown_control_connection(void)
 {
-    //teradown_relay_connections();
+    // disconnect everything and close...
+    //teardown_relay_connections();
+
+    bufferevent_free(context.control_buffers);
+    context.control_buffers = 0;
+
     event_base_loopexit(context.events, NULL);
+}
+
+
+static
+void keepalive(evutil_socket_t fd, short event, void *arg)
+{
+    assert(event & EV_TIMEOUT);
+    if(!context.alive || !context.control_buffers)
+    {
+        debug("connection down");
+        teardown_control_connection();
+        return;
+    }
+
+    debug("sending alive");
+    ++ context.msg_alive.seq;
+    bufferevent_write(  context.control_buffers,
+                        &context.msg_alive,
+                        sizeof(context.msg_alive));
+
+    context.alive = 0;
 }
