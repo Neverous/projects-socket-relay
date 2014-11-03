@@ -576,7 +576,7 @@ void accept_data_connection(struct evconnlistener *listener,
         buffevent,
         authenticate_data_connection,
         NULL,
-        error_on_control_connection_bufferevent,
+        error_on_data_connection_bufferevent,
         NULL);
 
     bufferevent_enable(buffevent, EV_READ | EV_WRITE);
@@ -644,7 +644,8 @@ void error_on_data_connection_bufferevent(  struct bufferevent *buffevent,
     if(events & (BEV_EVENT_EOF | BEV_EVENT_ERROR))
     {
         debug("data connection end of data");
-        teardown_data_channel((struct Channel *) data_channel, 1);
+        if(data_channel)
+            teardown_data_channel((struct Channel *) data_channel, 1);
     }
 }
 
@@ -867,7 +868,7 @@ static
 void setup_data_channel(struct Channel *channel, struct bufferevent *buffevent)
 {
     channel->channel_buffers = buffevent;
-    bufferevent_setcb(  buffevent,
+    bufferevent_setcb(  channel->peer_buffers,
                         read_relay_connection,
                         NULL,
                         error_on_relay_connection_bufferevent,
