@@ -99,7 +99,7 @@ void debug(const char *fmt, ...)
     fflush(stderr);
 }
 
-// CONTROLL CONNECTION
+// CONTROL CONNECTION
 
 static
 void authenticate_control_connection(struct bufferevent *buffevent, void *args);
@@ -124,6 +124,45 @@ void error_on_control_connection_bufferevent(   struct bufferevent *buffevent,
 inline
 static
 void teardown_control_connection(void);
+
+// DATA CONNECTION
+/*static
+void read_data_connection(struct bufferevent *buffevent, void *data_channel);
+
+static
+void error_on_data_connection_bufferevent(  struct bufferevent *buffevent,
+                                            short events,
+                                            void *data_channel);
+*/
+// RELAY CONNECTION
+inline
+static
+void teardown_relay_connections(void);
+
+/*static
+void read_relay_connection(struct bufferevent *buffevent, void *data_channel);
+
+static
+void error_on_relay_connection_bufferevent( struct bufferevent *buffevent,
+                                            short events,
+                                            void *data_channels);
+*/
+// CHANNELS
+inline
+static
+void allocate_data_channels(void);
+
+inline
+static
+struct Channel *setup_data_channel(struct MessageOpenChannel *ope);
+
+inline
+static
+void teardown_data_channel(struct Channel *channel, uint8_t close_channel);
+
+inline
+static
+struct Channel *find_data_channel(const struct AuthenticationHash *token);
 
 // KEEPALIVE
 static
@@ -401,23 +440,25 @@ void process_control_message(   struct bufferevent *buffevent,
 
         case CLOSE_CHANNEL:
             {
-                //struct MessageCloseChannel *clo =
-                //    (struct MessageCloseChannel *) msg;
+                struct MessageCloseChannel *clo =
+                    (struct MessageCloseChannel *) msg;
 
                 debug("CLOSE_CHANNEL");
-                debug("NOT YET IMPLEMENTED!");
-                /*
                 struct Channel *channel = find_data_channel(&clo->response);
                 if(!channel)
                     debug("channel already closed?");
 
                 else
                     teardown_data_channel(channel, 0);
-                    */
             }
             break;
 
         case OPEN_CHANNEL:
+            {
+                setup_data_channel((struct MessageOpenChannel *) msg);
+            }
+            break;
+
         case CHALLENGE:
         case RESPONSE:
             {
@@ -455,7 +496,7 @@ static
 void teardown_control_connection(void)
 {
     // disconnect everything and close...
-    //teardown_relay_connections();
+    teardown_relay_connections();
 
     bufferevent_free(context.control_buffers);
     context.control_buffers = 0;
@@ -463,6 +504,153 @@ void teardown_control_connection(void)
     event_base_loopexit(context.events, NULL);
 }
 
+/*static
+void read_data_connection(struct bufferevent *buffevent, void *data_channel)
+{
+    debug("data: reading data");
+    struct Channel *current = (struct Channel *) data_channel;
+    struct evbuffer *input  = bufferevent_get_input(buffevent);
+
+    bufferevent_write_buffer(current->peer_buffers, input);
+}
+
+static
+void error_on_data_connection_bufferevent(  struct bufferevent *buffevent,
+                                            short events,
+                                            void *data_channel)
+{
+    if(events & BEV_EVENT_ERROR)
+        perror("bufferevent");
+
+    if(events & (BEV_EVENT_EOF | BEV_EVENT_ERROR))
+    {
+        debug("data connection end of data");
+        if(data_channel)
+            teardown_data_channel((struct Channel *) data_channel, 1);
+    }
+}*/
+
+inline
+static
+void teardown_relay_connections(void)
+{
+    debug("relays teardown");
+    while(context.channels)
+        teardown_data_channel(context.channels, 1);
+}
+
+/*static
+void read_relay_connection(struct bufferevent *buffevent, void *data_channel)
+{
+    debug("relay: reading data");
+    struct Channel *current = (struct Channel *) data_channel;
+    struct evbuffer *input  = bufferevent_get_input(buffevent);
+
+    bufferevent_write_buffer(current->channel_buffers, input);
+}
+
+static
+void error_on_relay_connection_bufferevent( struct bufferevent *buffevent,
+                                            short events,
+                                            void *data_channel)
+{
+    if(events & BEV_EVENT_ERROR)
+        perror("bufferevent");
+
+    if(events & (BEV_EVENT_EOF | BEV_EVENT_ERROR))
+    {
+        debug("relay connection end of data");
+        teardown_data_channel((struct Channel *) data_channel, 1);
+    }
+}*/
+
+inline
+static
+void allocate_data_channels(void)
+{
+    assert(!context.free_channels);
+    int32_t count = 8192 / sizeof(struct Channel);
+    context.free_channels =
+        (struct Channel *) malloc(count * sizeof(struct Channel));
+    memset(context.free_channels, 0, count * sizeof(struct Channel));
+    struct Channel *cur = context.free_channels;
+    for(int c = 0; c < count; ++ c, ++ cur)
+    {
+        cur->next = cur + 1;
+        cur->prev = cur - 1;
+    }
+
+    context.free_channels->prev = NULL;
+    -- cur;
+    cur->next = NULL;
+}
+
+inline
+static
+struct Channel *setup_data_channel(struct MessageOpenChannel *ope)
+{
+    debug("NOT YET IMPLEMENTED");
+    return 0;
+}
+
+inline
+static
+void teardown_data_channel(struct Channel *channel, uint8_t close_channel)
+{
+    assert(channel);
+    debug("data channel teardown");
+    if(context.channels == channel)
+        context.channels = channel->next;
+
+    if(channel->prev)
+        channel->prev->next = channel->next;
+
+    if(channel->next)
+        channel->next->prev = channel->prev;
+
+    if(channel->channel_buffers)
+    {
+        bufferevent_free(channel->channel_buffers);
+        channel->channel_buffers = 0;
+    }
+
+    if(channel->peer_buffers)
+    {
+        bufferevent_free(channel->peer_buffers);
+        channel->peer_buffers = 0;
+    }
+
+    channel->prev = 0;
+    channel->next = context.free_channels;
+    if(context.free_channels)
+    {
+        assert(!context.free_channels->prev);
+        context.free_channels->prev = channel;
+    }
+
+    context.free_channels = channel;
+
+    if(close_channel)
+    {
+        struct MessageCloseChannel clo;
+        clo.type = CLOSE_CHANNEL;
+        memcpy(&clo.response, &channel->token, CHALLENGE_LENGTH);
+        bufferevent_write(  context.control_buffers,
+                            &clo,
+                            sizeof(clo));
+    }
+}
+
+inline
+static
+struct Channel *find_data_channel(const struct AuthenticationHash *token)
+{
+    struct Channel *cur = context.channels;
+    while(cur && !authentication_compare_hash(&cur->token, token))
+        cur = cur->next;
+
+    return cur;
+}
 
 static
 void keepalive(evutil_socket_t fd, short event, void *arg)
@@ -526,8 +714,7 @@ void cleanup_channels(evutil_socket_t fd, short event, void *arg)
         {
             debug("removing stalled channel");
             struct Channel *next = cur->next;
-            debug("NOT YET IMPLEMENTED!");
-            //teardown_data_channel(cur, 1);
+            teardown_data_channel(cur, 1);
             cur = next;
         }
 
