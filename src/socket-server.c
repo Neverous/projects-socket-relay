@@ -66,6 +66,7 @@ struct Options
 struct Context
 {
     struct event_base       *events;
+    struct evdns_base       *dns;
     struct bufferevent      *control_buffers;
 
     struct AuthenticationHash   challenge;
@@ -126,27 +127,27 @@ static
 void teardown_control_connection(void);
 
 // DATA CONNECTION
-/*static
+static
 void read_data_connection(struct bufferevent *buffevent, void *data_channel);
 
 static
 void error_on_data_connection_bufferevent(  struct bufferevent *buffevent,
                                             short events,
                                             void *data_channel);
-*/
+
 // RELAY CONNECTION
 inline
 static
 void teardown_relay_connections(void);
 
-/*static
+static
 void read_relay_connection(struct bufferevent *buffevent, void *data_channel);
 
 static
 void error_on_relay_connection_bufferevent( struct bufferevent *buffevent,
                                             short events,
                                             void *data_channels);
-*/
+
 // CHANNELS
 inline
 static
@@ -209,8 +210,7 @@ int32_t main(int32_t argc, char **argv)
         return 2;
     }
 
-    struct evdns_base *dns;
-    dns = evdns_base_new(context.events, 1);
+    context.dns = evdns_base_new(context.events, 1);
 
     context.control_buffers = bufferevent_socket_new(
         context.events,
@@ -224,9 +224,9 @@ int32_t main(int32_t argc, char **argv)
     }
 
     bufferevent_setwatermark(   context.control_buffers,
-                                EV_READ,
+                                EV_READ | EV_WRITE,
                                 sizeof(struct Message),
-                                4096);
+                                8192);
 
     bufferevent_setcb(  context.control_buffers,
                         authenticate_control_connection,
@@ -237,7 +237,7 @@ int32_t main(int32_t argc, char **argv)
     bufferevent_enable(context.control_buffers, EV_READ | EV_WRITE);
     bufferevent_socket_connect_hostname(
         context.control_buffers,
-        dns,
+        context.dns,
         AF_UNSPEC,
         options.relay_host,
         options.control_port);
@@ -455,7 +455,9 @@ void process_control_message(   struct bufferevent *buffevent,
 
         case OPEN_CHANNEL:
             {
-                setup_data_channel((struct MessageOpenChannel *) msg);
+                struct Channel *channel = setup_data_channel((struct MessageOpenChannel *) msg);
+                if(!channel)
+                    debug("couldn't allocate channel");
             }
             break;
 
@@ -504,10 +506,10 @@ void teardown_control_connection(void)
     event_base_loopexit(context.events, NULL);
 }
 
-/*static
+static
 void read_data_connection(struct bufferevent *buffevent, void *data_channel)
 {
-    debug("data: reading data");
+    //debug("data: reading data");
     struct Channel *current = (struct Channel *) data_channel;
     struct evbuffer *input  = bufferevent_get_input(buffevent);
 
@@ -528,7 +530,7 @@ void error_on_data_connection_bufferevent(  struct bufferevent *buffevent,
         if(data_channel)
             teardown_data_channel((struct Channel *) data_channel, 1);
     }
-}*/
+}
 
 inline
 static
@@ -539,10 +541,10 @@ void teardown_relay_connections(void)
         teardown_data_channel(context.channels, 1);
 }
 
-/*static
+static
 void read_relay_connection(struct bufferevent *buffevent, void *data_channel)
 {
-    debug("relay: reading data");
+    //debug("relay: reading data");
     struct Channel *current = (struct Channel *) data_channel;
     struct evbuffer *input  = bufferevent_get_input(buffevent);
 
@@ -562,7 +564,7 @@ void error_on_relay_connection_bufferevent( struct bufferevent *buffevent,
         debug("relay connection end of data");
         teardown_data_channel((struct Channel *) data_channel, 1);
     }
-}*/
+}
 
 inline
 static
@@ -589,8 +591,95 @@ inline
 static
 struct Channel *setup_data_channel(struct MessageOpenChannel *ope)
 {
-    debug("NOT YET IMPLEMENTED");
-    return 0;
+    debug("creating new data channel");
+    if(!context.free_channels)
+        allocate_data_channels();
+
+    assert(context.free_channels);
+    struct Channel *channel = context.free_channels;
+    context.free_channels = context.free_channels->next;
+    if(context.free_channels)
+        context.free_channels->prev = NULL;
+
+    memset(channel, 0, sizeof(struct Channel));
+    channel->next = context.channels;
+    if(context.channels)
+        context.channels->prev = channel;
+
+    context.channels = channel;
+    authentication_prepare_response(&channel->token,
+                                    &ope->challenge,
+                                    options.password,
+                                    context.secret);
+
+    channel->peer_buffers = bufferevent_socket_new(
+        context.events,
+        -1,
+        BEV_OPT_CLOSE_ON_FREE);
+
+    if(!channel->peer_buffers)
+    {
+        perror("bufferevent_socket_new");
+        teardown_data_channel(channel, 1);
+        return 0;
+    }
+
+    bufferevent_setwatermark(   channel->peer_buffers,
+                                EV_READ | EV_WRITE,
+                                sizeof(struct Message),
+                                8192);
+
+    bufferevent_setcb(  channel->peer_buffers,
+                        read_relay_connection,
+                        NULL,
+                        error_on_relay_connection_bufferevent,
+                        channel);
+
+    bufferevent_enable(channel->peer_buffers, EV_READ | EV_WRITE);
+    bufferevent_socket_connect_hostname(channel->peer_buffers,
+                                        context.dns,
+                                        AF_UNSPEC,
+                                        options.host,
+                                        ope->port);
+
+    channel->channel_buffers = bufferevent_socket_new(
+        context.events,
+        -1,
+        BEV_OPT_CLOSE_ON_FREE);
+
+    if(!channel->channel_buffers)
+    {
+        perror("bufferevent_socket_new");
+        teardown_data_channel(channel, 1);
+        return 0;
+    }
+
+    bufferevent_setwatermark(   channel->channel_buffers,
+                                EV_READ | EV_WRITE,
+                                sizeof(struct Message),
+                                8192);
+
+    bufferevent_setcb(  channel->channel_buffers,
+                        read_data_connection,
+                        NULL,
+                        error_on_data_connection_bufferevent,
+                        channel);
+
+    bufferevent_enable(channel->channel_buffers, EV_READ | EV_WRITE);
+    bufferevent_socket_connect_hostname(channel->channel_buffers,
+                                        context.dns,
+                                        AF_UNSPEC,
+                                        options.relay_host,
+                                        options.control_port);
+
+    struct MessageResponse res;
+    res.type = RESPONSE;
+    memcpy(&res.response, &channel->token, CHALLENGE_LENGTH);
+    bufferevent_write(  channel->channel_buffers,
+                        &res,
+                        sizeof(res));
+
+    return channel;
 }
 
 inline

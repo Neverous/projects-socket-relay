@@ -341,8 +341,8 @@ void accept_control_connection( struct evconnlistener *listener,
                         NULL);
 
     bufferevent_setwatermark(   context.control_buffers,
-                                EV_READ,
-                                sizeof(struct Message), 4096);
+                                EV_READ | EV_WRITE,
+                                sizeof(struct Message), 8192);
 
     bufferevent_enable(context.control_buffers, EV_READ | EV_WRITE);
 
@@ -571,7 +571,7 @@ void accept_data_connection(struct evconnlistener *listener,
         return;
     }
 
-    bufferevent_setwatermark(buffevent, EV_READ, 0, 4096);
+    bufferevent_setwatermark(buffevent, EV_READ | EV_WRITE, 0, 8192);
     bufferevent_setcb(
         buffevent,
         authenticate_data_connection,
@@ -618,15 +618,16 @@ void authenticate_data_connection(struct bufferevent *buffevent, void *args)
                         read_data_connection,
                         NULL,
                         error_on_data_connection_bufferevent,
-                        &current);
+                        current);
 
-    read_data_connection(buffevent, args);
+    read_data_connection(buffevent, current);
 }
 
 static
 void read_data_connection(struct bufferevent *buffevent, void *data_channel)
 {
-    debug("data: reading data");
+    //assert(data_channel);
+    //debug("data: reading data");
     struct Channel *current = (struct Channel *) data_channel;
     struct evbuffer *input  = bufferevent_get_input(buffevent);
 
@@ -654,9 +655,16 @@ static
 void setup_relay_connections(void)
 {
     const char *w = options.relay_ports;
-    for(context.relays_count = 0;
+    for(context.relays_count = 1;
         w[context.relays_count];
         w[context.relays_count] == ',' ? ++ context.relays_count : *w++);
+
+    if(!context.relays_count)
+    {
+        debug("missing relay ports!");
+        event_base_loopexit(context.events, NULL);
+        return;
+    }
 
     context.relays =
         (struct RelayListener *) malloc(
@@ -668,7 +676,14 @@ void setup_relay_connections(void)
     {
         char        proto[4];
         uint16_t    port_from;
-        sscanf(w, "%[^:]:%hu:%hu,", proto, &port_from, &cur->port);
+        int32_t     bytes;
+
+        if(sscanf(w, "%[^:]:%hu:%hu,%n", proto, &port_from, &cur->port, &bytes) != 3)
+        {
+            debug("invalid relay ports format!");
+            event_base_loopexit(context.events, NULL);
+            return;
+        }
 
         if(strcmp(proto, "tcp"))
         {
@@ -701,6 +716,7 @@ void setup_relay_connections(void)
                                         error_on_relay_connection_listener);
 
         ++ cur;
+        w += bytes;
     }
 }
 
@@ -745,7 +761,7 @@ void accept_relay_connection(   struct evconnlistener *listener,
         return;
     }
 
-    bufferevent_setwatermark(buffevent, EV_READ, 0, 4096);
+    bufferevent_setwatermark(buffevent, EV_READ | EV_WRITE, 0, 8192);
     bufferevent_enable(buffevent, EV_READ | EV_WRITE);
 
     struct RelayListener *relay = (struct RelayListener *) relay_listener;
@@ -776,7 +792,7 @@ void error_on_relay_connection_listener(    struct evconnlistener *listener,
 static
 void read_relay_connection(struct bufferevent *buffevent, void *data_channel)
 {
-    debug("relay: reading data");
+    //debug("relay: reading data");
     struct Channel *current = (struct Channel *) data_channel;
     struct evbuffer *input  = bufferevent_get_input(buffevent);
 
@@ -833,7 +849,8 @@ struct Channel *request_data_channel(   struct bufferevent *buffevent,
     assert(context.free_channels);
     struct Channel *channel = context.free_channels;
     context.free_channels = context.free_channels->next;
-    context.free_channels->prev = NULL;
+    if(context.free_channels)
+        context.free_channels->prev = NULL;
 
     memset(channel, 0, sizeof(struct Channel));
     channel->next = context.channels;
