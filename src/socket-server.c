@@ -28,6 +28,8 @@
 #include "protocol/authentication.h"
 #include "protocol/channel.h"
 
+#define BUFFER_LIMIT 8192
+
 // Usage options and info
 const char *VERSION = "0.1.0";
 const char *HELP    = "Usage: socket-server [options]\n\n\
@@ -232,7 +234,7 @@ int32_t main(int32_t argc, char **argv)
     bufferevent_setwatermark(   context.control_buffers,
                                 EV_READ | EV_WRITE,
                                 sizeof(struct Message),
-                                8192);
+                                BUFFER_LIMIT);
 
     bufferevent_setcb(  context.control_buffers,
                         authenticate_control_connection,
@@ -517,9 +519,12 @@ void read_data_connection(struct bufferevent *buffevent, void *data_channel)
 {
     //debug("data: reading data");
     struct Channel *current = (struct Channel *) data_channel;
-    struct evbuffer *input  = bufferevent_get_input(buffevent);
+    if(evbuffer_get_length(bufferevent_get_output(current->peer_buffers)) < BUFFER_LIMIT)
+    {
+        struct evbuffer *input  = bufferevent_get_input(buffevent);
 
-    bufferevent_write_buffer(current->peer_buffers, input);
+        bufferevent_write_buffer(current->peer_buffers, input);
+    }
 }
 
 static
@@ -527,9 +532,13 @@ void write_data_connection(struct bufferevent *buffevent, void *data_channel)
 {
     //debug("data: writing data");
     struct Channel *current = (struct Channel *) data_channel;
-    struct evbuffer *input  = bufferevent_get_input(current->peer_buffers);
+    if(evbuffer_get_length(bufferevent_get_output(buffevent)) < BUFFER_LIMIT)
+    {
+        struct evbuffer *input  =
+            bufferevent_get_input(current->peer_buffers);
 
-    bufferevent_write_buffer(buffevent, input);
+        bufferevent_write_buffer(buffevent, input);
+    }
 }
 
 static
@@ -562,9 +571,11 @@ void read_relay_connection(struct bufferevent *buffevent, void *data_channel)
 {
     //debug("relay: reading data");
     struct Channel *current = (struct Channel *) data_channel;
-    struct evbuffer *input  = bufferevent_get_input(buffevent);
-
-    bufferevent_write_buffer(current->channel_buffers, input);
+    if(evbuffer_get_length(bufferevent_get_output(current->channel_buffers)) < BUFFER_LIMIT)
+    {
+        struct evbuffer *input  = bufferevent_get_input(buffevent);
+        bufferevent_write_buffer(current->channel_buffers, input);
+    }
 }
 
 static
@@ -572,9 +583,13 @@ void write_relay_connection(struct bufferevent *buffevent, void *data_channel)
 {
     //debug("relay: writing data");
     struct Channel *current = (struct Channel *) data_channel;
-    struct evbuffer *input  = bufferevent_get_input(current->channel_buffers);
+    if(evbuffer_get_length(bufferevent_get_output(buffevent)) < BUFFER_LIMIT)
+    {
+        struct evbuffer *input  =
+            bufferevent_get_input(current->channel_buffers);
 
-    bufferevent_write_buffer(buffevent, input);
+        bufferevent_write_buffer(buffevent, input);
+    }
 }
 
 static
@@ -653,7 +668,7 @@ struct Channel *setup_data_channel(struct MessageOpenChannel *ope)
     bufferevent_setwatermark(   channel->peer_buffers,
                                 EV_READ | EV_WRITE,
                                 sizeof(struct Message),
-                                8192);
+                                BUFFER_LIMIT);
 
     bufferevent_setcb(  channel->peer_buffers,
                         read_relay_connection,
@@ -683,7 +698,7 @@ struct Channel *setup_data_channel(struct MessageOpenChannel *ope)
     bufferevent_setwatermark(   channel->channel_buffers,
                                 EV_READ | EV_WRITE,
                                 sizeof(struct Message),
-                                8192);
+                                BUFFER_LIMIT);
 
     bufferevent_setcb(  channel->channel_buffers,
                         read_data_connection,
