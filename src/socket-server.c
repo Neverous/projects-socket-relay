@@ -131,6 +131,9 @@ static
 void read_data_connection(struct bufferevent *buffevent, void *data_channel);
 
 static
+void write_data_connection(struct bufferevent *buffevent, void *data_channel);
+
+static
 void error_on_data_connection_bufferevent(  struct bufferevent *buffevent,
                                             short events,
                                             void *data_channel);
@@ -142,6 +145,9 @@ void teardown_relay_connections(void);
 
 static
 void read_relay_connection(struct bufferevent *buffevent, void *data_channel);
+
+static
+void write_relay_connection(struct bufferevent *buffevent, void *data_channel);
 
 static
 void error_on_relay_connection_bufferevent( struct bufferevent *buffevent,
@@ -517,6 +523,16 @@ void read_data_connection(struct bufferevent *buffevent, void *data_channel)
 }
 
 static
+void write_data_connection(struct bufferevent *buffevent, void *data_channel)
+{
+    //debug("data: writing data");
+    struct Channel *current = (struct Channel *) data_channel;
+    struct evbuffer *input  = bufferevent_get_input(current->peer_buffers);
+
+    bufferevent_write_buffer(buffevent, input);
+}
+
+static
 void error_on_data_connection_bufferevent(  struct bufferevent *buffevent,
                                             short events,
                                             void *data_channel)
@@ -549,6 +565,16 @@ void read_relay_connection(struct bufferevent *buffevent, void *data_channel)
     struct evbuffer *input  = bufferevent_get_input(buffevent);
 
     bufferevent_write_buffer(current->channel_buffers, input);
+}
+
+static
+void write_relay_connection(struct bufferevent *buffevent, void *data_channel)
+{
+    //debug("relay: writing data");
+    struct Channel *current = (struct Channel *) data_channel;
+    struct evbuffer *input  = bufferevent_get_input(current->channel_buffers);
+
+    bufferevent_write_buffer(buffevent, input);
 }
 
 static
@@ -631,7 +657,7 @@ struct Channel *setup_data_channel(struct MessageOpenChannel *ope)
 
     bufferevent_setcb(  channel->peer_buffers,
                         read_relay_connection,
-                        NULL,
+                        write_relay_connection,
                         error_on_relay_connection_bufferevent,
                         channel);
 
@@ -661,7 +687,7 @@ struct Channel *setup_data_channel(struct MessageOpenChannel *ope)
 
     bufferevent_setcb(  channel->channel_buffers,
                         read_data_connection,
-                        NULL,
+                        write_data_connection,
                         error_on_data_connection_bufferevent,
                         channel);
 

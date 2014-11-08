@@ -149,6 +149,9 @@ static
 void read_data_connection(struct bufferevent *buffevent, void *data_channel);
 
 static
+void write_data_connection(struct bufferevent *buffevent, void *data_channel);
+
+static
 void error_on_data_connection_bufferevent(  struct bufferevent *buffevent,
                                             short events,
                                             void *data_channel);
@@ -175,6 +178,9 @@ void error_on_relay_connection_listener(struct evconnlistener *listener,
 
 static
 void read_relay_connection(struct bufferevent *buffevent, void *data_channel);
+
+static
+void write_relay_connection(struct bufferevent *buffevent, void *data_channel);
 
 static
 void error_on_relay_connection_bufferevent( struct bufferevent *buffevent,
@@ -616,7 +622,7 @@ void authenticate_data_connection(struct bufferevent *buffevent, void *args)
     setup_data_channel(current, buffevent);
     bufferevent_setcb(  buffevent,
                         read_data_connection,
-                        NULL,
+                        write_data_connection,
                         error_on_data_connection_bufferevent,
                         current);
 
@@ -626,12 +632,23 @@ void authenticate_data_connection(struct bufferevent *buffevent, void *args)
 static
 void read_data_connection(struct bufferevent *buffevent, void *data_channel)
 {
-    //assert(data_channel);
     //debug("data: reading data");
     struct Channel *current = (struct Channel *) data_channel;
+    assert(buffevent == current->channel_buffers);
     struct evbuffer *input  = bufferevent_get_input(buffevent);
 
     bufferevent_write_buffer(current->peer_buffers, input);
+}
+
+static
+void write_data_connection(struct bufferevent *buffevent, void *data_channel)
+{
+    //debug("data: writing data");
+    struct Channel *current = (struct Channel *) data_channel;
+    assert(buffevent == current->channel_buffers);
+    struct evbuffer *input  = bufferevent_get_input(current->peer_buffers);
+
+    bufferevent_write_buffer(buffevent, input);
 }
 
 static
@@ -762,7 +779,6 @@ void accept_relay_connection(   struct evconnlistener *listener,
     }
 
     bufferevent_setwatermark(buffevent, EV_READ | EV_WRITE, 0, 8192);
-    bufferevent_enable(buffevent, EV_READ | EV_WRITE);
 
     struct RelayListener *relay = (struct RelayListener *) relay_listener;
     struct Channel *channel = request_data_channel( buffevent,
@@ -794,9 +810,21 @@ void read_relay_connection(struct bufferevent *buffevent, void *data_channel)
 {
     //debug("relay: reading data");
     struct Channel *current = (struct Channel *) data_channel;
+    assert(buffevent == current->peer_buffers);
     struct evbuffer *input  = bufferevent_get_input(buffevent);
 
     bufferevent_write_buffer(current->channel_buffers, input);
+}
+
+static
+void write_relay_connection(struct bufferevent *buffevent, void *data_channel)
+{
+    //debug("relay: writing data");
+    struct Channel *current = (struct Channel *) data_channel;
+    assert(buffevent == current->peer_buffers);
+    struct evbuffer *input  = bufferevent_get_input(current->channel_buffers);
+
+    bufferevent_write_buffer(buffevent, input);
 }
 
 static
@@ -887,9 +915,11 @@ void setup_data_channel(struct Channel *channel, struct bufferevent *buffevent)
     channel->channel_buffers = buffevent;
     bufferevent_setcb(  channel->peer_buffers,
                         read_relay_connection,
-                        NULL,
+                        write_relay_connection,
                         error_on_relay_connection_bufferevent,
                         channel);
+
+    bufferevent_enable(channel->peer_buffers, EV_READ | EV_WRITE);
 }
 
 inline
