@@ -34,34 +34,6 @@ uint8_t authentication_get_secret_byte(const struct AuthenticationHash *token)
 
 inline
 static
-uint8_t *authentication_encode_buffer(  uint8_t *buffer,
-                                        uint32_t size,
-                                        uint8_t secret)
-{
-    // FIXME
-    uint8_t *cur = buffer;
-    for(uint32_t b = 0; b < size; ++ b, ++ cur)
-        *cur ^= secret;
-
-    return buffer;
-}
-
-inline
-static
-uint8_t *authentication_decode_buffer(  uint8_t *buffer,
-                                        uint32_t size,
-                                        uint8_t secret)
-{
-    // FIXME
-    uint8_t *cur = buffer;
-    for(uint32_t b = 0; b < size; ++ b, ++ cur)
-        *cur ^= secret;
-
-    return buffer;
-}
-
-inline
-static
 uint8_t authentication_compare_hash(const struct AuthenticationHash *first,
                                     const struct AuthenticationHash *second)
 {
@@ -73,8 +45,7 @@ static
 uint8_t authentication_prepare_response(
         struct AuthenticationHash *response,
         const struct AuthenticationHash *challenge,
-        const char *password,
-        uint8_t secret)
+        const char *password)
 {
     int32_t passlen = strlen(password);
     assert(passlen < 256);
@@ -87,13 +58,7 @@ uint8_t authentication_prepare_response(
     memcpy(message + passlen, challenge->hash, CHALLENGE_LENGTH);
     sha256(message, CHALLENGE_LENGTH + passlen, digest);
     memcpy(response->hash, digest, CHALLENGE_LENGTH);
-    /*authentication_encode_buffer(
-        response->hash,
-        CHALLENGE_LENGTH,
-        authentication_get_secret_byte(challenge));
-    */
     return 1;
-
 }
 
 inline
@@ -105,4 +70,3 @@ uint8_t authentication_prepare_challenge(struct AuthenticationHash *challenge)
 }
 
 #endif // __AUTHENTICATION_H__
-

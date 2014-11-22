@@ -7,8 +7,6 @@
 #include <stdint.h>
 #include <event2/listener.h>
 
-#pragma pack(push, 1)
-
 struct RelayListener
 {
     uint8_t     proto;
@@ -16,10 +14,8 @@ struct RelayListener
     union
     {
         struct evconnlistener   *tcp_listener;
-        // TODO: udp support
+        struct event            *listener;
     };
 }; // struct RelayListener
-
-#pragma pack(pop)
 
 #endif // __RELAY_LISTENER_H__

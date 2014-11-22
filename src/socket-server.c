@@ -77,8 +77,8 @@ struct Context
     uint8_t                     alive;
     struct event                *keepalive;
 
-    struct Channel              *channels;
-    struct Channel              *free_channels;
+    struct Channel  *channels;
+    struct Channel  *free_channels;
 } context;
 
 // SIMPLE LOGGING
@@ -167,7 +167,9 @@ struct Channel *setup_data_channel(struct MessageOpenChannel *ope);
 
 inline
 static
-void teardown_data_channel(struct Channel *channel, uint8_t close_channel);
+void teardown_data_channel(
+    struct Channel *channel,
+    uint8_t close_channel);
 
 inline
 static
@@ -325,15 +327,13 @@ void authenticate_control_connection(struct bufferevent *buffevent, void *args)
     authentication_prepare_response(
         &res.response,
         &cha->challenge,
-        options.password,
-        context.secret);
+        options.password);
 
     evbuffer_drain(input, wanted);
     authentication_prepare_response(
         &context.challenge,
         &res.response,
-        options.password,
-        context.secret);
+        options.password);
 
     bufferevent_write(  buffevent,
                         &res,
@@ -452,7 +452,9 @@ void process_control_message(   struct bufferevent *buffevent,
                     (struct MessageCloseChannel *) msg;
 
                 debug("CLOSE_CHANNEL");
-                struct Channel *channel = find_data_channel(&clo->response);
+                struct Channel *channel =
+                    find_data_channel(&clo->response);
+
                 if(!channel)
                     debug("channel already closed?");
 
@@ -463,7 +465,9 @@ void process_control_message(   struct bufferevent *buffevent,
 
         case OPEN_CHANNEL:
             {
-                struct Channel *channel = setup_data_channel((struct MessageOpenChannel *) msg);
+                struct Channel *channel =
+                    setup_data_channel((struct MessageOpenChannel *) msg);
+
                 if(!channel)
                     debug("couldn't allocate channel");
             }
@@ -518,8 +522,10 @@ static
 void read_data_connection(struct bufferevent *buffevent, void *data_channel)
 {
     //debug("data: reading data");
-    struct Channel *current = (struct Channel *) data_channel;
-    if(evbuffer_get_length(bufferevent_get_output(current->peer_buffers)) < BUFFER_LIMIT)
+    struct BufferedChannel *current = (struct BufferedChannel *) data_channel;
+    current->alive = 2;
+    if(evbuffer_get_length(bufferevent_get_output(current->peer_buffers))
+        < BUFFER_LIMIT)
     {
         struct evbuffer *input  = bufferevent_get_input(buffevent);
 
@@ -531,7 +537,8 @@ static
 void write_data_connection(struct bufferevent *buffevent, void *data_channel)
 {
     //debug("data: writing data");
-    struct Channel *current = (struct Channel *) data_channel;
+    struct BufferedChannel *current = (struct BufferedChannel *) data_channel;
+    current->alive = 2;
     if(evbuffer_get_length(bufferevent_get_output(buffevent)) < BUFFER_LIMIT)
     {
         struct evbuffer *input  =
@@ -570,8 +577,10 @@ static
 void read_relay_connection(struct bufferevent *buffevent, void *data_channel)
 {
     //debug("relay: reading data");
-    struct Channel *current = (struct Channel *) data_channel;
-    if(evbuffer_get_length(bufferevent_get_output(current->channel_buffers)) < BUFFER_LIMIT)
+    struct BufferedChannel *current = (struct BufferedChannel *) data_channel;
+    current->alive = 2;
+    if(evbuffer_get_length(bufferevent_get_output(current->channel_buffers))
+        < BUFFER_LIMIT)
     {
         struct evbuffer *input  = bufferevent_get_input(buffevent);
         bufferevent_write_buffer(current->channel_buffers, input);
@@ -582,7 +591,8 @@ static
 void write_relay_connection(struct bufferevent *buffevent, void *data_channel)
 {
     //debug("relay: writing data");
-    struct Channel *current = (struct Channel *) data_channel;
+    struct BufferedChannel *current = (struct BufferedChannel *) data_channel;
+    current->alive = 2;
     if(evbuffer_get_length(bufferevent_get_output(buffevent)) < BUFFER_LIMIT)
     {
         struct evbuffer *input  =
@@ -637,7 +647,8 @@ struct Channel *setup_data_channel(struct MessageOpenChannel *ope)
         allocate_data_channels();
 
     assert(context.free_channels);
-    struct Channel *channel = context.free_channels;
+    struct BufferedChannel *channel =
+        (struct BufferedChannel *) context.free_channels;
     context.free_channels = context.free_channels->next;
     if(context.free_channels)
         context.free_channels->prev = NULL;
@@ -645,13 +656,12 @@ struct Channel *setup_data_channel(struct MessageOpenChannel *ope)
     memset(channel, 0, sizeof(struct Channel));
     channel->next = context.channels;
     if(context.channels)
-        context.channels->prev = channel;
+        context.channels->prev = (struct Channel *) channel;
 
-    context.channels = channel;
+    context.channels = (struct Channel *) channel;
     authentication_prepare_response(&channel->token,
                                     &ope->challenge,
-                                    options.password,
-                                    context.secret);
+                                    options.password);
 
     channel->peer_buffers = bufferevent_socket_new(
         context.events,
@@ -661,7 +671,7 @@ struct Channel *setup_data_channel(struct MessageOpenChannel *ope)
     if(!channel->peer_buffers)
     {
         perror("bufferevent_socket_new");
-        teardown_data_channel(channel, 1);
+        teardown_data_channel((struct Channel *) channel, 1);
         return 0;
     }
 
@@ -681,7 +691,7 @@ struct Channel *setup_data_channel(struct MessageOpenChannel *ope)
                                         context.dns,
                                         AF_UNSPEC,
                                         options.host,
-                                        ope->port);
+                                        ntohs(ope->port));
 
     channel->channel_buffers = bufferevent_socket_new(
         context.events,
@@ -691,7 +701,7 @@ struct Channel *setup_data_channel(struct MessageOpenChannel *ope)
     if(!channel->channel_buffers)
     {
         perror("bufferevent_socket_new");
-        teardown_data_channel(channel, 1);
+        teardown_data_channel((struct Channel *) channel, 1);
         return 0;
     }
 
@@ -720,7 +730,8 @@ struct Channel *setup_data_channel(struct MessageOpenChannel *ope)
                         &res,
                         sizeof(res));
 
-    return channel;
+    channel->alive = 2;
+    return (struct Channel *) channel;
 }
 
 inline
@@ -738,16 +749,21 @@ void teardown_data_channel(struct Channel *channel, uint8_t close_channel)
     if(channel->next)
         channel->next->prev = channel->prev;
 
-    if(channel->channel_buffers)
+    assert(channel->proto == IPPROTO_TCP);
+
+    struct BufferedChannel *buffchannel =
+        (struct BufferedChannel *) channel;
+
+    if(buffchannel->channel_buffers)
     {
-        bufferevent_free(channel->channel_buffers);
-        channel->channel_buffers = 0;
+        bufferevent_free(buffchannel->channel_buffers);
+        buffchannel->channel_buffers = 0;
     }
 
-    if(channel->peer_buffers)
+    if(buffchannel->peer_buffers)
     {
-        bufferevent_free(channel->peer_buffers);
-        channel->peer_buffers = 0;
+        bufferevent_free(buffchannel->peer_buffers);
+        buffchannel->peer_buffers = 0;
     }
 
     channel->prev = 0;
@@ -813,14 +829,15 @@ void display_stats(evutil_socket_t fd, short event, void *arg)
     for(struct Channel *cur = context.channels; cur; cur = cur->next)
     {
         ++ used_channels;
-        if(cur->marked == 1)
-            marked_channels += cur->marked;
+        if(cur->alive == 1)
+            marked_channels += cur->alive;
     }
 
     for(struct Channel *cur = context.free_channels; cur; cur = cur->next)
         ++ free_channels;
 
-    debug("STATS: Channels used/marked: %u/%u, free: %u", used_channels, marked_channels, free_channels);
+    debug("STATS: Channels used/marked: %u/%u, free: %u",
+        used_channels, marked_channels, free_channels);
 }
 
 static
@@ -831,28 +848,17 @@ void cleanup_channels(evutil_socket_t fd, short event, void *arg)
 
     for(struct Channel *cur = context.channels; cur;)
     {
-        if(cur->marked == 2)
-            cur = cur->next;
-
-        else if(cur->channel_buffers && cur->peer_buffers)
-        {
-            cur->marked = 2;
-            cur = cur->next;
-        }
-
-        else if(cur->marked == 1)
+        if(!cur->alive)
         {
             debug("removing stalled channel");
             struct Channel *next = cur->next;
             teardown_data_channel(cur, 1);
             cur = next;
+            debug("removing stalled channel");
+            continue;
         }
 
-        else
-        {
-            assert(cur->marked == 0);
-            cur->marked = 1;
-            cur = cur->next;
-        }
+        -- cur->alive;
+        cur = cur->next;
     }
 }
