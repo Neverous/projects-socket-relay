@@ -543,7 +543,7 @@ void process_control_message(struct bufferevent *buffevent, struct Message *msg)
                                 context.ping
                             -   context.last_alive
                             +   cur.tv_sec * 1000LL
-                            +   cur.tv_nsec / 1000LL
+                            +   (cur.tv_nsec + 999999LL) / 1000000LL
                         ) / 4;
 
                     debug("control connection: estimated ping %ums",
@@ -1114,7 +1114,9 @@ void keepalive(evutil_socket_t fd, short events, void *arg)
                         sizeof(context.msg_alive));
 
     struct timespec cur; clock_gettime(CLOCK_MONOTONIC, &cur);
-    context.last_alive = cur.tv_sec * 1000LL + cur.tv_nsec / 1000LL;
+    context.last_alive =
+        cur.tv_sec * 1000LL + cur.tv_nsec / 1000000LL;
+
     context.alive = 0;
 }
 
