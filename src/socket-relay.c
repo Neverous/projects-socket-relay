@@ -542,7 +542,7 @@ void process_control_message(struct bufferevent *buffevent, struct Message *msg)
                             +   cur.tv_nsec / 1000LL
                         ) / 4;
 
-                    debug("control connection: estimated ping %lldms",
+                    debug("control connection: estimated ping %ums",
                         context.ping);
                 }
             }
