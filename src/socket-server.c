@@ -15,6 +15,8 @@
 #include <assert.h>
 #include <errno.h>
 #include <time.h>
+#include <sys/socket.h>
+#include <netinet/tcp.h>
 
 // libevent
 #include <event2/event.h>
@@ -242,6 +244,13 @@ int32_t main(int32_t argc, char **argv)
     context.control_buffers = bufferevent_socket_new(   context.events,
                                                         -1,
                                                         BEV_OPT_CLOSE_ON_FREE);
+
+    int32_t one = 1;
+    setsockopt( bufferevent_getfd(context.control_buffers),
+                IPPROTO_TCP,
+                TCP_NODELAY,
+                &one,
+                sizeof(one));
 
     if(!context.control_buffers)
     {
@@ -743,6 +752,14 @@ union Channel *setup_channel(struct MessageOpenChannel *ope)
                     return 0;
                 }
 
+                int32_t one = 1;
+                setsockopt( bufferevent_getfd(channel->tcp.peer_buffers),
+                        IPPROTO_TCP,
+                        TCP_NODELAY,
+                        &one,
+                        sizeof(one));
+
+
                 bufferevent_setwatermark(   channel->tcp.peer_buffers,
                                             EV_READ | EV_WRITE,
                                             sizeof(struct Message),
@@ -774,6 +791,12 @@ union Channel *setup_channel(struct MessageOpenChannel *ope)
                     teardown_channel(channel, 1);
                     return 0;
                 }
+
+                setsockopt( bufferevent_getfd(channel->tcp.channel_buffers),
+                        IPPROTO_TCP,
+                        TCP_NODELAY,
+                        &one,
+                        sizeof(one));
 
                 bufferevent_setwatermark(   channel->tcp.channel_buffers,
                                             EV_READ | EV_WRITE,

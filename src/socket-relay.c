@@ -15,6 +15,8 @@
 #include <assert.h>
 #include <errno.h>
 #include <time.h>
+#include <sys/socket.h>
+#include <netinet/tcp.h>
 #include <arpa/inet.h>
 
 // libevent
@@ -367,6 +369,8 @@ void accept_control_connection( struct evconnlistener *listener,
     debug(  "control connection: from %s",
             inet_ntop(AF_INET, &(ipv4->sin_addr), buffer, INET_ADDRSTRLEN));
 
+    int32_t one = 1;
+    setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, &one, sizeof(one));
     context.control_buffers = bufferevent_socket_new(
         context.events,
         fd,
@@ -626,6 +630,9 @@ void accept_tcp_channel_connection( struct evconnlistener *listener,
     debug(  "tcp channel connection: from %s",
             inet_ntop(AF_INET, &(ipv4->sin_addr), buffer, INET_ADDRSTRLEN));
 
+    int32_t one = 1;
+    setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, &one, sizeof(one));
+
     struct bufferevent *buffevent = bufferevent_socket_new(
         context.events,
         fd,
@@ -860,6 +867,9 @@ void accept_tcp_peer_connection(struct evconnlistener *listener,
     char buffer[INET_ADDRSTRLEN];
     debug(  "tcp peer connection: from %s",
             inet_ntop(AF_INET, &(ipv4->sin_addr), buffer, INET_ADDRSTRLEN));
+
+    int32_t one = 1;
+    setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, &one, sizeof(one));
 
     struct bufferevent *buffevent = bufferevent_socket_new(
         context.events,
