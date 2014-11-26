@@ -75,6 +75,8 @@ struct Context
     uint8_t                     secret;
     struct MessageAlive         msg_alive;
     uint8_t                     alive;
+    uint32_t                    ping;
+    uint64_t                    last_alive;
     struct event                *keepalive;
 
     union Channel   *channels;
@@ -477,6 +479,21 @@ void process_control_message(struct bufferevent *buffevent, struct Message *msg)
                     bufferevent_write(  buffevent,
                                         &context.msg_alive,
                                         sizeof(context.msg_alive));
+                }
+
+                else
+                {
+                    struct timespec cur; clock_gettime(CLOCK_MONOTONIC, &cur);
+                    context.ping =
+                        (
+                                context.ping
+                            -   context.last_alive
+                            +   cur.tv_sec * 1000LL
+                            +   cur.tv_nsec / 1000LL
+                        ) / 4;
+
+                    debug("control connection: estimated ping %lldms",
+                        context.ping);
                 }
             }
             break;
@@ -888,6 +905,8 @@ void keepalive(evutil_socket_t fd, short events, void *arg)
                         &context.msg_alive,
                         sizeof(context.msg_alive));
 
+    struct timespec cur; clock_gettime(CLOCK_MONOTONIC, &cur);
+    context.last_alive = cur.tv_sec * 1000LL + cur.tv_nsec / 1000LL;
     context.alive = 0;
 }
 
