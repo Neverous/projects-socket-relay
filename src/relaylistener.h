@@ -14,7 +14,8 @@ struct RelayListener
     union
     {
         struct evconnlistener   *tcp_listener;
-        struct event            *listener;
+        struct event            *udp_listener;
+        struct event            *esp_listener;
     };
 }; // struct RelayListener
 

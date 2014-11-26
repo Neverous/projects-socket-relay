@@ -5,54 +5,56 @@
 #define __CHANNEL_H__
 
 #include <event2/bufferevent.h>
+#include <event2/util.h>
+
 #include "authentication.h"
 
-struct Channel
+struct BaseChannel
 {
-    struct Channel              *next;
-    struct Channel              *prev;
+    struct BaseChannel          *next;
+    struct BaseChannel          *prev;
 
     uint8_t                     proto;
     uint8_t                     alive;
     struct AuthenticationHash   token;
+}; // struct BaseChannel
 
-    uint8_t                     __alignment__[16];
-}; // struct Channel
-
-struct SimpleChannel
+struct ESPChannel
 {
-    struct Channel              *next;
-    struct Channel              *prev;
+    struct BaseChannel          base;
 
-    uint8_t                     proto;
-    uint8_t                     alive;
-    struct AuthenticationHash   token;
+    evutil_socket_t             channel_fd;
+    struct sockaddr_in          channel_addr;
 
-    uint32_t                    channel_fd;
-    uint32_t                    peer_fd;
+    evutil_socket_t             peer_fd;
+    struct sockaddr_in          peer_addr;
+}; // struct ESPChannel
 
-    uint8_t                     __alignment__[8];
-}; // struct SimpleChannel
-
-struct BufferedChannel
+struct UDPChannel
 {
-    struct Channel              *next;
-    struct Channel              *prev;
+    struct BaseChannel          base;
 
-    uint8_t                     proto;
-    uint8_t                     alive;
-    struct AuthenticationHash   token;
+    evutil_socket_t             channel_fd;
+    struct sockaddr_in          channel_addr;
+
+    evutil_socket_t             peer_fd;
+    struct sockaddr_in          peer_addr;
+}; // struct UDPChannel
+
+struct TCPChannel
+{
+    struct BaseChannel          base;
 
     struct bufferevent          *channel_buffers;
     struct bufferevent          *peer_buffers;
-}; // struct BufferedChannel
+}; // struct TCPChannel
 
-static_assert(
-    sizeof(struct Channel) == sizeof(struct SimpleChannel),
-    "Invalid SimpleChannel structure size");
-
-static_assert(
-    sizeof(struct Channel) == sizeof(struct BufferedChannel),
-    "Invalid BufferedChannel structure size");
+union Channel
+{
+    struct BaseChannel  base;
+    struct UDPChannel   udp;
+    struct TCPChannel   tcp;
+    struct ESPChannel   esp;
+};
 
 #endif // __CHANNEL_H__

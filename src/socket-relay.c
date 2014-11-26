@@ -15,6 +15,7 @@
 #include <assert.h>
 #include <errno.h>
 #include <time.h>
+#include <arpa/inet.h>
 
 // libevent
 #include <event2/listener.h>
@@ -72,33 +73,17 @@ struct Context
     uint8_t                     alive;
     struct event                *keepalive;
 
-    struct Channel        *channels;
-    struct Channel        *free_channels;
+    union Channel           *channels;
+    union Channel           *free_channels;
 
-    struct RelayListener        *relays;
-    uint16_t                    relays_count;
+    struct RelayListener    *relays;
+    uint16_t                relays_count;
 } context;
 
 // SIMPLE LOGGING
 inline
 static
-void debug(const char *fmt, ...)
-{
-    char buffer[32];
-    time_t raw;
-    struct tm *local;
-    va_list args;
-
-    time(&raw);
-    local = localtime(&raw);
-    strftime(buffer, 32, "%Y-%m-%d %H:%M:%S", local);
-    fprintf(stderr, "[%s] ", buffer);
-    va_start(args, fmt);
-    vfprintf(stderr, fmt, args);
-    va_end(args);
-    fputs("\n", stderr);
-    fflush(stderr);
-}
+void debug(const char *fmt, ...);
 
 // CONTROL CONNECTION
 static
@@ -136,27 +121,38 @@ inline
 static
 void teardown_control_connection(void);
 
-// DATA CONNECTION
+// CHANNEL CONNECTION
 static
-void accept_data_connection(struct evconnlistener *listener,
-                            evutil_socket_t fd,
-                            struct sockaddr *address,
-                            int socklen,
-                            void *args);
+void accept_tcp_channel_connection( struct evconnlistener *listener,
+                                    evutil_socket_t fd,
+                                    struct sockaddr *address,
+                                    int socklen,
+                                    void *args);
 
 static
-void authenticate_data_connection(struct bufferevent *buffevent, void *args);
+void authenticate_tcp_channel_connection(   struct bufferevent *buffevent,
+                                            void *args);
 
 static
-void read_data_connection(struct bufferevent *buffevent, void *data_channel);
+void read_tcp_channel_connection(struct bufferevent *buffevent, void *channel);
 
 static
-void write_data_connection(struct bufferevent *buffevent, void *data_channel);
+void write_tcp_channel_connection(struct bufferevent *buffevent, void *channel);
 
 static
-void error_on_data_connection_bufferevent(  struct bufferevent *buffevent,
-                                            short events,
-                                            void *data_channel);
+void error_on_tcp_channel_connection_bufferevent(
+    struct bufferevent *buffevent,
+    short events,
+    void *channel);
+
+/*static
+void read_udp_channel_connection(evutil_socket_t fd, short events, void *arg);
+
+static
+void error_on_udp_channel_connection(   evutil_socket_t fd,
+                                        short events,
+                                        void *args);
+*/
 
 // RELAY CONNECTION
 inline
@@ -168,62 +164,74 @@ static
 void teardown_relay_connections(void);
 
 static
-void accept_relay_connection(   struct evconnlistener *listener,
+void accept_tcp_peer_connection(struct evconnlistener *listener,
                                 evutil_socket_t fd,
                                 struct sockaddr *address,
                                 int socklen,
                                 void *relay_listener);
 
 static
-void error_on_relay_connection_listener(struct evconnlistener *listener,
-                                        void *args);
+void error_on_tcp_peer_connection_listener( struct evconnlistener *listener,
+                                            void *args);
 
 static
-void read_relay_connection(struct bufferevent *buffevent, void *data_channel);
+void read_tcp_peer_connection(struct bufferevent *buffevent, void *channel);
 
 static
-void write_relay_connection(struct bufferevent *buffevent, void *data_channel);
+void write_tcp_peer_connection(struct bufferevent *buffevent, void *channel);
 
 static
-void error_on_relay_connection_bufferevent( struct bufferevent *buffevent,
-                                            short events,
-                                            void *data_channel);
+void error_on_tcp_peer_connection_bufferevent(  struct bufferevent *buffevent,
+                                                short events,
+                                                void *channel);
+
+/*static
+void read_udp_peer_connection(  evutil_socket_t fd,
+                                short events,
+                                void *channel);
+
+inline
+static
+void error_on_udp_peer_connection(  evutil_socket_t fd,
+                                    short events,
+                                    void *channel);
+*/
+
+// OTHER
+/*static
+void read_esp_connection(evutil_socket_t fd, short events, void *args);
+
+inline
+static
+void error_on_esp_connection(evutil_socket_t fd, short events, void *args);
+*/
 
 // CHANNELS
 inline
 static
-void allocate_data_channels(void);
+void allocate_channels(void);
 
 inline
 static
-struct Channel *request_data_channel( struct bufferevent *buffevent,
-                                            struct sockaddr *address,
-                                            uint8_t server_proto,
-                                            uint16_t server_port);
+union Channel *request_channel(uint8_t proto, uint16_t port);
 
 inline
 static
-void setup_data_channel(struct Channel *channel,
-                        struct bufferevent *buffevent);
+void teardown_channel(union Channel *channel, uint8_t close_channel);
 
 inline
 static
-void teardown_data_channel( struct Channel *channel,
-                            uint8_t close_channel);
+union Channel *find_channel(const struct AuthenticationHash *token);
 
-inline
+// EVENTS
 static
-struct Channel *find_data_channel(const struct AuthenticationHash *token);
-
-// KEEPALIVE
-static
-void keepalive(evutil_socket_t fd, short event, void *arg);
+void keepalive(evutil_socket_t fd, short events, void *arg);
 
 static
-void display_stats(evutil_socket_t fd, short event, void *arg);
+void display_stats(evutil_socket_t fd, short events, void *arg);
 
 static
-void cleanup_channels(evutil_socket_t fd, short event, void *arg);
+void cleanup_channels(evutil_socket_t fd, short events, void *arg);
 
 int32_t main(int32_t argc, char **argv)
 {
@@ -306,9 +314,10 @@ int32_t main(int32_t argc, char **argv)
 
     event_add(cleanup, &ten_seconds);
 
-    debug("working...");
+    debug("main: waiting for control connection");
     event_base_dispatch(context.events);
 
+    debug("main: shutting down");
     event_del(stats);
     event_free(stats);
     stats = 0;
@@ -323,6 +332,25 @@ int32_t main(int32_t argc, char **argv)
     return 0;
 }
 
+inline
+static
+void debug(const char *fmt, ...)
+{
+    char        buffer[32];
+    time_t      raw;
+    struct tm   *local;
+    va_list     args;
+
+    time(&raw);
+    local = localtime(&raw);
+    strftime(buffer, 32, "%Y-%m-%d %H:%M:%S", local);
+    fprintf(stderr, "[%s] ", buffer);
+    va_start(args, fmt);
+    vfprintf(stderr, fmt, args);
+    va_end(args);
+    fputs("\n", stderr);
+    fflush(stderr);
+}
 
 static
 void accept_control_connection( struct evconnlistener *listener,
@@ -331,7 +359,12 @@ void accept_control_connection( struct evconnlistener *listener,
                                 int socklen,
                                 void *args)
 {
-    debug("got control connection");
+    assert(address->sa_family == AF_INET);
+    struct sockaddr_in *ipv4 = (struct sockaddr_in *) address;
+    char buffer[INET_ADDRSTRLEN];
+    debug(  "control connection: from %s",
+            inet_ntop(AF_INET, &(ipv4->sin_addr), buffer, INET_ADDRSTRLEN));
+
     context.control_buffers = bufferevent_socket_new(
         context.events,
         fd,
@@ -356,7 +389,8 @@ void accept_control_connection( struct evconnlistener *listener,
 
     bufferevent_enable(context.control_buffers, EV_READ | EV_WRITE);
 
-    evconnlistener_set_cb(listener, accept_data_connection, NULL);
+    // disable new connections while authenticating
+    evconnlistener_set_cb(listener, NULL, NULL);
     setup_control_connection(context.control_buffers);
 }
 
@@ -381,7 +415,7 @@ void error_on_control_connection_listener(  struct evconnlistener *listener,
                                             void *args)
 {
     int error = EVUTIL_SOCKET_ERROR();
-    debug(  "evconnlistener: %d %s",
+    debug(  "control connection: evconnlistener error %d %s",
             error, evutil_socket_error_to_string(error));
 
     event_base_loopexit(context.events, NULL);
@@ -391,7 +425,8 @@ void error_on_control_connection_listener(  struct evconnlistener *listener,
 static
 void authenticate_control_connection(struct bufferevent *buffevent, void *args)
 {
-    debug("authentication: reading data");
+    debug("control connection: authentication reading data");
+    context.alive = 1;
     struct evbuffer *input  = bufferevent_get_input(buffevent);
 
     size_t len      = evbuffer_get_length(input);
@@ -399,12 +434,13 @@ void authenticate_control_connection(struct bufferevent *buffevent, void *args)
     if(len < wanted)
         return;
 
+    debug("control connection: authentication checking message");
     struct MessageResponse *res =
         (struct MessageResponse *) evbuffer_pullup(input, wanted);
 
     if(res->type != RESPONSE)
     {
-        debug(  "authentication: invalid message type %s",
+        debug(  "control connection: invalid authentication message %s",
                 message_get_type_string((struct Message *) res));
 
         teardown_control_connection();
@@ -413,12 +449,12 @@ void authenticate_control_connection(struct bufferevent *buffevent, void *args)
 
     if(!authentication_compare_hash(&context.challenge, &res->response))
     {
-        debug("authentication: authentication failed");
+        debug("control connection: authentication failed");
         teardown_control_connection();
         return;
     }
 
-    debug("control authenticated");
+    debug("control connection: authenticated");
     struct MessageResponse res2;
     res2.type = RESPONSE;
     authentication_prepare_response(
@@ -444,7 +480,8 @@ void authenticate_control_connection(struct bufferevent *buffevent, void *args)
 static
 void read_control_connection(struct bufferevent *buffevent, void *args)
 {
-    debug("control: reading data");
+    debug("control connection: reading data");
+    context.alive = 1;
     struct evbuffer *input  = bufferevent_get_input(buffevent);
 
     size_t len = evbuffer_get_length(input);
@@ -464,7 +501,6 @@ void read_control_connection(struct bufferevent *buffevent, void *args)
         len -= wanted;
     }
 
-    context.alive = 1;
     struct timeval five_seconds = { 5, 0 };
     event_del(context.keepalive);
     event_add(context.keepalive, &five_seconds);
@@ -472,20 +508,19 @@ void read_control_connection(struct bufferevent *buffevent, void *args)
 
 inline
 static
-void process_control_message(   struct bufferevent *buffevent,
-                                struct Message *msg)
+void process_control_message(struct bufferevent *buffevent, struct Message *msg)
 {
-    debug("processing control message");
+    debug("control connection: processing message");
     switch(msg->type)
     {
         case NOOP:
-            debug("NOOP");
+            debug("control connection: message NOOP");
             break;
 
         case ALIVE:
             {
                 struct MessageAlive *ali = (struct MessageAlive *) msg;
-                debug("ALIVE %d", ali->seq);
+                debug("control connection: message ALIVE(%d)", ali->seq);
                 if(context.msg_alive.seq != ali->seq)
                 {
                     context.msg_alive.seq = ali->seq;
@@ -501,22 +536,22 @@ void process_control_message(   struct bufferevent *buffevent,
                 struct MessageCloseChannel *clo =
                     (struct MessageCloseChannel *) msg;
 
-                debug("CLOSE_CHANNEL");
-                struct Channel *channel =
-                    find_data_channel(&clo->response);
+                debug("control connection: message CLOSE_CHANNEL");
+                union Channel *channel =
+                    find_channel(&clo->response);
 
                 if(!channel)
-                    debug("channel already closed?");
+                    debug("control connection: channel doesn't exist");
 
                 else
-                    teardown_data_channel(channel, 0);
+                    teardown_channel(channel, 0);
             }
             break;
 
         case CHALLENGE:
         case RESPONSE:
             {
-                debug(  "not yet implemented message received (%s)",
+                debug(  "control connection: not yet implemented message (%s)",
                         message_get_type_string(msg));
             }
             break;
@@ -524,7 +559,7 @@ void process_control_message(   struct bufferevent *buffevent,
         case OPEN_CHANNEL:
         default:
             {
-                debug(  "invalid message received (%s)",
+                debug(  "control connection: invalid message (%s)",
                         message_get_type_string(msg));
             }
             break;
@@ -541,7 +576,7 @@ void error_on_control_connection_bufferevent(   struct bufferevent *buffevent,
 
     if(events & (BEV_EVENT_EOF | BEV_EVENT_ERROR))
     {
-        debug("control end of data");
+        debug("control connection: end of data");
         teardown_control_connection();
     }
 }
@@ -562,13 +597,18 @@ void teardown_control_connection(void)
 }
 
 static
-void accept_data_connection(struct evconnlistener *listener,
-                            evutil_socket_t fd,
-                            struct sockaddr *address,
-                            int socklen,
-                            void *args)
+void accept_tcp_channel_connection( struct evconnlistener *listener,
+                                    evutil_socket_t fd,
+                                    struct sockaddr *address,
+                                    int socklen,
+                                    void *args)
 {
-    debug("got data connection");
+    assert(address->sa_family == AF_INET);
+    struct sockaddr_in *ipv4 = (struct sockaddr_in *) address;
+    char buffer[INET_ADDRSTRLEN];
+    debug(  "tcp channel connection: from %s",
+            inet_ntop(AF_INET, &(ipv4->sin_addr), buffer, INET_ADDRSTRLEN));
+
     struct bufferevent *buffevent = bufferevent_socket_new(
         context.events,
         fd,
@@ -584,98 +624,112 @@ void accept_data_connection(struct evconnlistener *listener,
     bufferevent_setwatermark(buffevent, EV_READ | EV_WRITE, 0, BUFFER_LIMIT);
     bufferevent_setcb(
         buffevent,
-        authenticate_data_connection,
+        authenticate_tcp_channel_connection,
         NULL,
-        error_on_data_connection_bufferevent,
+        error_on_tcp_channel_connection_bufferevent,
         NULL);
 
     bufferevent_enable(buffevent, EV_READ | EV_WRITE);
 }
 
 static
-void authenticate_data_connection(struct bufferevent *buffevent, void *args)
+void authenticate_tcp_channel_connection(   struct bufferevent *buffevent,
+                                            void *args)
 {
+    debug("tcp channel connection: authentication reading data");
     struct evbuffer *input  = bufferevent_get_input(buffevent);
 
     size_t len      = evbuffer_get_length(input);
     size_t wanted   = sizeof(struct MessageResponse);
-    if(len < sizeof(struct MessageResponse))
+    if(len < wanted)
         return;
 
+    debug("tcp channel connection: authentication checking message");
     struct MessageResponse *res =
         (struct MessageResponse *) evbuffer_pullup(input, wanted);
 
     if(res->type != RESPONSE)
     {
-        debug(  "authentication: invalid message type %s",
+        debug(  "tcp channel connection: invalid authentication message %s",
                 message_get_type_string((struct Message *) res));
 
         bufferevent_free(buffevent);
         return;
     }
 
-    struct Channel *current = find_data_channel(&res->response);
+    union Channel *current = find_channel(&res->response);
     if(!current)
     {
-        debug("authentication: authentication failed");
+        debug("tcp channel connection: authentication failed");
         bufferevent_free(buffevent);
         return;
     }
 
-    debug("data connection authenticated");
-    setup_data_channel(current, buffevent);
-    bufferevent_setcb(  buffevent,
-                        read_data_connection,
-                        write_data_connection,
-                        error_on_data_connection_bufferevent,
+    debug("tcp channel connection: authenticated");
+    assert(current->base.proto == IPPROTO_TCP);
+    current->tcp.channel_buffers = buffevent;
+    bufferevent_setcb(  current->tcp.peer_buffers,
+                        read_tcp_peer_connection,
+                        write_tcp_peer_connection,
+                        error_on_tcp_peer_connection_bufferevent,
                         current);
 
-    read_data_connection(buffevent, current);
+    bufferevent_enable(current->tcp.peer_buffers, EV_READ | EV_WRITE);
+    bufferevent_setcb(  buffevent,
+                        read_tcp_channel_connection,
+                        write_tcp_channel_connection,
+                        error_on_tcp_channel_connection_bufferevent,
+                        current);
+
+    read_tcp_channel_connection(buffevent, current);
 }
 
 static
-void read_data_connection(struct bufferevent *buffevent, void *data_channel)
+void read_tcp_channel_connection(struct bufferevent *buffevent, void *channel)
 {
-    //debug("data: reading data");
-    struct BufferedChannel *current = (struct BufferedChannel *) data_channel;
-    current->alive = 2;
-    if(evbuffer_get_length(bufferevent_get_output(current->peer_buffers))
+    union Channel *current = (union Channel *) channel;
+    current->base.alive = 2;
+    assert(buffevent == current->tcp.channel_buffers);
+
+    if(evbuffer_get_length(bufferevent_get_output(current->tcp.peer_buffers))
         < BUFFER_LIMIT)
     {
         struct evbuffer *input  = bufferevent_get_input(buffevent);
 
-        bufferevent_write_buffer(current->peer_buffers, input);
+        bufferevent_write_buffer(current->tcp.peer_buffers, input);
     }
 }
 
 static
-void write_data_connection(struct bufferevent *buffevent, void *data_channel)
+void write_tcp_channel_connection(struct bufferevent *buffevent, void *channel)
 {
-    //debug("data: writing data");
-    struct BufferedChannel *current = (struct BufferedChannel *) data_channel;
-    current->alive = 2;
+    union Channel *current = (union Channel *) channel;
+    current->base.alive = 2;
+    assert(buffevent == current->tcp.channel_buffers);
+
     if(evbuffer_get_length(bufferevent_get_output(buffevent)) < BUFFER_LIMIT)
     {
         struct evbuffer *input  =
-            bufferevent_get_input(current->peer_buffers);
+            bufferevent_get_input(current->tcp.peer_buffers);
 
         bufferevent_write_buffer(buffevent, input);
     }
 }
 
 static
-void error_on_data_connection_bufferevent(  struct bufferevent *buffevent,
-                                            short events,
-                                            void *data_channel)
+void error_on_tcp_channel_connection_bufferevent(
+    struct bufferevent *buffevent,
+    short events,
+    void *channel)
 {
     if(events & BEV_EVENT_ERROR)
         perror("bufferevent");
 
     if(events & (BEV_EVENT_EOF | BEV_EVENT_ERROR))
     {
-        debug("data connection end of data");
-        if(data_channel)
-            teardown_data_channel((struct Channel *) data_channel, 1);
+        debug("tcp channel connection: end of data");
+        if(channel)
+            teardown_channel((union Channel *) channel, 1);
     }
 }
 
@@ -686,15 +740,19 @@ void setup_relay_connections(void)
     const char *w = options.relay_ports;
     for(context.relays_count = 1;
         w[context.relays_count];
-        w[context.relays_count] == ',' ? ++ context.relays_count : *w++);
+        w[context.relays_count] == ',' ? ++ context.relays_count : *w ++);
 
     if(!context.relays_count)
     {
-        debug("missing relay ports!");
+        debug("relay connections: missing ports");
         event_base_loopexit(context.events, NULL);
         return;
     }
 
+    debug("relay connections: setting up channel ports");
+    evconnlistener_set_cb(context.listener, accept_tcp_channel_connection, NULL);
+
+    debug("relay connections: setting up %d relay ports", context.relays_count);
     context.relays =
         (struct RelayListener *) malloc(
             context.relays_count * sizeof(struct RelayListener));
@@ -710,43 +768,45 @@ void setup_relay_connections(void)
         if(sscanf(w, "%[^:]:%hu:%hu,%n", proto, &port_from, &cur->port, &bytes)
             != 3)
         {
-            debug("invalid relay ports format!");
+            debug("relay connections: invalid relay ports format");
             event_base_loopexit(context.events, NULL);
             return;
         }
 
-        if(strcmp(proto, "tcp"))
+        if(!strcmp(proto, "tcp"))
         {
-            debug("only tcp supported so far!");
+            debug("setting up tcp relay %d -> %d", port_from, cur->port);
+            cur->proto = IPPROTO_TCP;
+            struct sockaddr_in  relay; memset(&relay, 0, sizeof(relay));
+            relay.sin_family        = AF_INET;
+            relay.sin_addr.s_addr   = INADDR_ANY;
+            relay.sin_port          = htons(port_from);
+
+            cur->tcp_listener = evconnlistener_new_bind(
+                context.events,
+                accept_tcp_peer_connection, cur,
+                LEV_OPT_CLOSE_ON_FREE | LEV_OPT_REUSEABLE, -1,
+                (struct sockaddr *) &relay, sizeof(relay));
+
+            if(!cur->tcp_listener)
+            {
+                perror("evconnlistener_new_bind");
+                return;
+            }
+
+            evconnlistener_set_error_cb(cur->tcp_listener,
+                                        error_on_tcp_peer_connection_listener);
+
+            ++ cur;
+            w += bytes;
+        }
+
+        else
+        {
+            debug("relay connections: unsupported protocol %s", proto);
             event_base_loopexit(context.events, NULL);
             return;
         }
-
-        debug("setting up %s %d -> %d", proto, port_from, cur->port);
-
-        cur->proto = 1;
-        struct sockaddr_in  relay; memset(&relay, 0, sizeof(relay));
-        relay.sin_family        = AF_INET;
-        relay.sin_addr.s_addr   = INADDR_ANY;
-        relay.sin_port          = htons(port_from);
-
-        cur->tcp_listener = evconnlistener_new_bind(
-            context.events,
-            accept_relay_connection, cur,
-            LEV_OPT_CLOSE_ON_FREE | LEV_OPT_REUSEABLE, -1,
-            (struct sockaddr *) &relay, sizeof(relay));
-
-        if(!cur->tcp_listener)
-        {
-            perror("evconnlistener_new_bind");
-            return;
-        }
-
-        evconnlistener_set_error_cb(    cur->tcp_listener,
-                                        error_on_relay_connection_listener);
-
-        ++ cur;
-        w += bytes;
     }
 }
 
@@ -754,7 +814,7 @@ inline
 static
 void teardown_relay_connections(void)
 {
-    debug("relays teardown");
+    debug("relay connections: teardown");
     struct RelayListener *cur = context.relays;
     for(int c = 0; c < context.relays_count; ++ c)
     {
@@ -766,19 +826,24 @@ void teardown_relay_connections(void)
     }
 
     while(context.channels)
-        teardown_data_channel(context.channels, 1);
+        teardown_channel(context.channels, 1);
 
     free(context.relays);
 }
 
 static
-void accept_relay_connection(   struct evconnlistener *listener,
+void accept_tcp_peer_connection(struct evconnlistener *listener,
                                 evutil_socket_t fd,
                                 struct sockaddr *address,
                                 int socklen,
                                 void *relay_listener)
 {
-    debug("got relay connection");
+    assert(address->sa_family == AF_INET);
+    struct sockaddr_in *ipv4 = (struct sockaddr_in *) address;
+    char buffer[INET_ADDRSTRLEN];
+    debug(  "tcp peer connection: from %s",
+            inet_ntop(AF_INET, &(ipv4->sin_addr), buffer, INET_ADDRSTRLEN));
+
     struct bufferevent *buffevent = bufferevent_socket_new(
         context.events,
         fd,
@@ -794,20 +859,18 @@ void accept_relay_connection(   struct evconnlistener *listener,
     bufferevent_setwatermark(buffevent, EV_READ | EV_WRITE, 0, BUFFER_LIMIT);
 
     struct RelayListener *relay = (struct RelayListener *) relay_listener;
-    struct Channel *channel = request_data_channel(   buffevent,
-                                                            address,
-                                                            relay->proto,
-                                                            relay->port);
+    union Channel *channel = request_channel(relay->proto, relay->port);
+    channel->tcp.peer_buffers = buffevent;
     bufferevent_setcb(
         buffevent,
         NULL,
         NULL,
-        error_on_relay_connection_bufferevent,
+        error_on_tcp_peer_connection_bufferevent,
         channel);
 }
 
 static
-void error_on_relay_connection_listener(    struct evconnlistener *listener,
+void error_on_tcp_peer_connection_listener( struct evconnlistener *listener,
                                             void *args)
 {
     int error = EVUTIL_SOCKET_ERROR();
@@ -819,180 +882,170 @@ void error_on_relay_connection_listener(    struct evconnlistener *listener,
 }
 
 static
-void read_relay_connection(struct bufferevent *buffevent, void *data_channel)
+void read_tcp_peer_connection(struct bufferevent *buffevent, void *channel)
 {
-    //debug("relay: reading data");
-    struct BufferedChannel *current = (struct BufferedChannel *) data_channel;
-    current->alive = 2;
-    if(evbuffer_get_length(bufferevent_get_output(current->channel_buffers))
+    union Channel *current = (union Channel *) channel;
+    current->base.alive = 2;
+    assert(buffevent == current->tcp.peer_buffers);
+
+    if(evbuffer_get_length(bufferevent_get_output(current->tcp.channel_buffers))
         < BUFFER_LIMIT)
     {
         struct evbuffer *input  = bufferevent_get_input(buffevent);
-        bufferevent_write_buffer(current->channel_buffers, input);
+        bufferevent_write_buffer(current->tcp.channel_buffers, input);
     }
 }
 
 static
-void write_relay_connection(struct bufferevent *buffevent, void *data_channel)
+void write_tcp_peer_connection(struct bufferevent *buffevent, void *channel)
 {
-    //debug("relay: writing data");
-    struct BufferedChannel *current = (struct BufferedChannel *) data_channel;
-    current->alive = 2;
-    assert(buffevent == current->peer_buffers);
+    union Channel *current = (union Channel *) channel;
+    current->base.alive = 2;
+    assert(buffevent == current->tcp.peer_buffers);
 
     if(evbuffer_get_length(bufferevent_get_output(buffevent)) < BUFFER_LIMIT)
     {
         struct evbuffer *input  =
-            bufferevent_get_input(current->channel_buffers);
+            bufferevent_get_input(current->tcp.channel_buffers);
 
         bufferevent_write_buffer(buffevent, input);
     }
 }
 
 static
-void error_on_relay_connection_bufferevent( struct bufferevent *buffevent,
-                                            short events,
-                                            void *data_channel)
+void error_on_tcp_peer_connection_bufferevent(  struct bufferevent *buffevent,
+                                                short events,
+                                                void *channel)
 {
     if(events & BEV_EVENT_ERROR)
         perror("bufferevent");
 
     if(events & (BEV_EVENT_EOF | BEV_EVENT_ERROR))
     {
-        debug("relay connection end of data");
-        teardown_data_channel((struct Channel *) data_channel, 1);
+        debug("tcp peer connection: end of data");
+        teardown_channel((union Channel *) channel, 1);
     }
 }
 
 inline
 static
-void allocate_data_channels(void)
+void allocate_channels(void)
 {
     assert(!context.free_channels);
-    int32_t count = 8192 / sizeof(struct Channel);
+    int32_t count = 8192 / sizeof(union Channel);
     context.free_channels =
-        (struct Channel *) malloc(count * sizeof(struct Channel));
-    memset(context.free_channels, 0, count * sizeof(struct Channel));
-    struct Channel *cur = context.free_channels;
+        (union Channel *) malloc(count * sizeof(union Channel));
+
+    memset(context.free_channels, 0, count * sizeof(union Channel));
+    union Channel *cur = context.free_channels;
     for(int c = 0; c < count; ++ c, ++ cur)
     {
-        cur->next = cur + 1;
-        cur->prev = cur - 1;
+        cur->base.next = &(cur + 1)->base;
+        cur->base.prev = &(cur - 1)->base;
     }
 
-    context.free_channels->prev = NULL;
+    context.free_channels->base.prev = NULL;
     -- cur;
-    cur->next = NULL;
+    cur->base.next = NULL;
     return;
 }
 
 inline
 static
-struct Channel *request_data_channel( struct bufferevent *buffevent,
-                                            struct sockaddr *address,
-                                            uint8_t server_proto,
-                                            uint16_t server_port)
+union Channel *request_channel(uint8_t proto, uint16_t port)
 {
+    debug("channel: request %d %d", proto, port);
     if(!context.free_channels)
-        allocate_data_channels();
+        allocate_channels();
 
     assert(context.free_channels);
-    struct Channel *channel = context.free_channels;
-    context.free_channels = context.free_channels->next;
+    union Channel *channel = context.free_channels;
+    context.free_channels = (union Channel *) context.free_channels->base.next;
     if(context.free_channels)
-        context.free_channels->prev = NULL;
+        context.free_channels->base.prev = NULL;
 
-    memset(channel, 0, sizeof(struct Channel));
-    channel->next = context.channels;
+    memset(channel, 0, sizeof(union Channel));
+    channel->base.next = &context.channels->base;
     if(context.channels)
-        context.channels->prev = channel;
+        context.channels->base.prev = &channel->base;
 
     context.channels = channel;
-    authentication_prepare_challenge(&channel->token);
+    channel->base.proto = proto;
+    authentication_prepare_challenge(&channel->base.token);
 
     struct MessageOpenChannel ope;
     ope.type    = OPEN_CHANNEL;
 
-    memcpy(&ope.challenge, &channel->token, CHALLENGE_LENGTH);
-    ope.port    = htons(server_port);
-    ope.proto   = server_proto;
-
-    assert(server_proto == IPPROTO_TCP);
-    struct BufferedChannel *buffchannel = (struct BufferedChannel *) channel;
+    memcpy(&ope.challenge, &channel->base.token, CHALLENGE_LENGTH);
+    ope.port    = htons(port);
+    ope.proto   = proto;
 
     bufferevent_write(  context.control_buffers,
                         &ope,
                         sizeof(ope));
 
-    buffchannel->peer_buffers = buffevent;
-    authentication_prepare_response(&channel->token,
-                                    &channel->token,
+    authentication_prepare_response(&channel->base.token,
+                                    &channel->base.token,
                                     options.password);
 
-    channel->alive = 2;
+    channel->base.alive = 2;
     return channel;
 }
 
 inline
 static
-void setup_data_channel(struct Channel *channel,
-                        struct bufferevent *buffevent)
-{
-    assert(channel->proto == IPPROTO_TCP);
-    struct BufferedChannel *buffchannel = (struct BufferedChannel *) channel;
-    buffchannel->channel_buffers = buffevent;
-    bufferevent_setcb(  buffchannel->peer_buffers,
-                        read_relay_connection,
-                        write_relay_connection,
-                        error_on_relay_connection_bufferevent,
-                        channel);
-
-    bufferevent_enable(buffchannel->peer_buffers, EV_READ | EV_WRITE);
-}
-
-inline
-static
-void teardown_data_channel(struct Channel *channel, uint8_t close_channel)
+void teardown_channel(union Channel *channel, uint8_t close_channel)
 {
     assert(channel);
-    debug("data channel teardown");
+    debug("channel: teardown");
     if(context.channels == channel)
-        context.channels = channel->next;
+        context.channels = (union Channel *) channel->base.next;
 
-    if(channel->prev)
-        channel->prev->next = channel->next;
+    if(channel->base.prev)
+        channel->base.prev->next = channel->base.next;
 
-    if(channel->next)
-        channel->next->prev = channel->prev;
+    if(channel->base.next)
+        channel->base.next->prev = channel->base.prev;
 
-    assert(channel->proto == IPPROTO_TCP);
-    struct BufferedChannel *buffchannel = (struct BufferedChannel *) channel;
-    if(buffchannel->channel_buffers)
+    switch(channel->base.proto)
     {
-        bufferevent_free(buffchannel->channel_buffers);
-        buffchannel->channel_buffers = 0;
+        case IPPROTO_TCP:
+            {
+                if(channel->tcp.channel_buffers)
+                {
+                    bufferevent_free(channel->tcp.channel_buffers);
+                    channel->tcp.channel_buffers = 0;
+                }
+
+                if(channel->tcp.peer_buffers)
+                {
+                    bufferevent_free(channel->tcp.peer_buffers);
+                    channel->tcp.peer_buffers = 0;
+                }
+            }
+            break;
+
+        default:
+            debug(  "channel: not yet implemented protocol %d",
+                    channel->base.proto);
+            break;
     }
 
-    if(buffchannel->peer_buffers)
-    {
-        bufferevent_free(buffchannel->peer_buffers);
-        buffchannel->peer_buffers = 0;
-    }
-
-    channel->prev = NULL;
-    channel->next = context.free_channels;
+    channel->base.prev = NULL;
+    channel->base.next = &context.free_channels->base;
     if(context.free_channels)
     {
-        assert(!context.free_channels->prev);
-        context.free_channels->prev = channel;
+        assert(!context.free_channels->base.prev);
+        context.free_channels->base.prev = &channel->base;
     }
 
     context.free_channels = channel;
     if(close_channel)
     {
+        debug("channel: sending CLOSE_CHANNEL");
         struct MessageCloseChannel clo;
         clo.type = CLOSE_CHANNEL;
-        memcpy(&clo.response, &channel->token, CHALLENGE_LENGTH);
+        memcpy(&clo.response, &channel->base.token, CHALLENGE_LENGTH);
         bufferevent_write(  context.control_buffers,
                             &clo,
                             sizeof(clo));
@@ -1001,33 +1054,33 @@ void teardown_data_channel(struct Channel *channel, uint8_t close_channel)
 
 inline
 static
-struct Channel *find_data_channel(const struct AuthenticationHash *token)
+union Channel *find_channel(const struct AuthenticationHash *token)
 {
-    struct Channel *cur = context.channels;
+    struct BaseChannel *cur = &context.channels->base;
     while(cur && !authentication_compare_hash(&cur->token, token))
         cur = cur->next;
 
-    return cur;
+    return (union Channel *) cur;
 }
 
 static
-void keepalive(evutil_socket_t fd, short event, void *arg)
+void keepalive(evutil_socket_t fd, short events, void *arg)
 {
-    assert(event & EV_TIMEOUT);
+    assert(events & EV_TIMEOUT);
     if(!context.control_buffers)
     {
-        debug("no connection");
+        debug("keepalive: no connection");
         return;
     }
 
     if(!context.alive)
     {
-        debug("connection down");
+        debug("keepalive: connection down");
         teardown_control_connection();
         return;
     }
 
-    debug("sending alive");
+    debug("keepalive: sending alive");
     ++ context.msg_alive.seq;
     bufferevent_write(  context.control_buffers,
                         &context.msg_alive,
@@ -1037,39 +1090,41 @@ void keepalive(evutil_socket_t fd, short event, void *arg)
 }
 
 static
-void display_stats(evutil_socket_t fd, short event, void *arg)
+void display_stats(evutil_socket_t fd, short events, void *arg)
 {
-    assert(event & EV_TIMEOUT);
+    assert(events & EV_TIMEOUT);
 
     uint32_t    used_channels   = 0;
-    uint32_t    marked_channels = 0;
+    uint32_t    alive_channels  = 0;
     uint32_t    free_channels   = 0;
-    for(struct Channel *cur = context.channels; cur; cur = cur->next)
+    for(struct BaseChannel *cur = &context.channels->base; cur; cur = cur->next)
     {
         ++ used_channels;
-        marked_channels += cur->alive == 1;
+        alive_channels += cur->alive > 1;
     }
 
-    for(struct Channel *cur = context.free_channels; cur; cur = cur->next)
+    for(struct BaseChannel *cur = &context.free_channels->base;
+        cur;
+        cur = cur->next)
         ++ free_channels;
 
-    debug("STATS: Channels used/marked: %u/%u, free: %u",
-        used_channels, marked_channels, free_channels);
+    debug("STATS: Channels used: %u, alive:%u, free: %u",
+        used_channels, alive_channels, free_channels);
 }
 
 static
-void cleanup_channels(evutil_socket_t fd, short event, void *arg)
+void cleanup_channels(evutil_socket_t fd, short events, void *arg)
 {
-    assert(event & EV_TIMEOUT);
-    debug("cleaning up channels");
+    assert(events & EV_TIMEOUT);
+    debug("clean up: channels");
 
-    for(struct Channel *cur = context.channels; cur;)
+    for(struct BaseChannel *cur = &context.channels->base; cur;)
     {
         if(!cur->alive)
         {
-            debug("removing stalled channel");
-            struct Channel *next = cur->next;
-            teardown_data_channel(cur, 1);
+            debug("clean uo: removing dead channel");
+            struct BaseChannel *next = cur->next;
+            teardown_channel((union Channel *) cur, 1);
             cur = next;
             continue;
         }
