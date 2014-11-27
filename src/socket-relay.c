@@ -1131,7 +1131,7 @@ void display_stats(evutil_socket_t fd, short events, void *arg)
     for(struct BaseChannel *cur = &context.channels->base; cur; cur = cur->next)
     {
         ++ used_channels;
-        alive_channels += cur->alive > 1;
+        alive_channels += cur->alive > 0;
     }
 
     for(struct BaseChannel *cur = &context.free_channels->base;
@@ -1139,7 +1139,7 @@ void display_stats(evutil_socket_t fd, short events, void *arg)
         cur = cur->next)
         ++ free_channels;
 
-    debug("STATS: Channels used: %u, alive:%u, free: %u",
+    debug("STATS: Channels used: %u, alive: %u, free: %u",
         used_channels, alive_channels, free_channels);
 }
 
