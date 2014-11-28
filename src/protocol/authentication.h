@@ -13,6 +13,10 @@
 #define CHALLENGE_LENGTH    32
 #define SECRET_BYTE         17
 
+#ifndef static_assert
+#define static_assert(...) _Static_assert(__VA_ARGS__)
+#endif
+
 #pragma pack(push, 1)
 
 struct AuthenticationHash

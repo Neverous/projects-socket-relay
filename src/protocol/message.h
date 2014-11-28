@@ -8,6 +8,10 @@
 #include <assert.h>
 #include "authentication.h"
 
+#ifndef static_assert
+#define static_assert(...) _Static_assert(__VA_ARGS__)
+#endif
+
 #pragma pack(push, 1)
 
 enum MessageType

@@ -689,6 +689,7 @@ void authenticate_tcp_channel_connection(   struct bufferevent *buffevent,
         return;
     }
 
+    evbuffer_drain(input, wanted);
     debug("tcp channel connection: authenticated");
     assert(current->base.proto == IPPROTO_TCP);
     current->tcp.channel_buffers = buffevent;
