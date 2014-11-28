@@ -30,7 +30,7 @@
 #include "protocol/channel.h"
 #include "relaylistener.h"
 
-#define BUFFER_LIMIT 8192
+#define BUFFER_LIMIT 262144
 
 // Usage options and info
 const char *VERSION = "0.1.0";
