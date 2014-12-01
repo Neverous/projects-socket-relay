@@ -23,9 +23,6 @@ struct ESPChannel
 {
     struct BaseChannel          base;
 
-    evutil_socket_t             channel_fd;
-    struct sockaddr_in          channel_addr;
-
     evutil_socket_t             peer_fd;
     struct sockaddr_in          peer_addr;
 }; // struct ESPChannel
@@ -34,9 +31,11 @@ struct UDPChannel
 {
     struct BaseChannel          base;
 
+    struct event                *channel_event;
     evutil_socket_t             channel_fd;
     struct sockaddr_in          channel_addr;
 
+    struct event                *peer_event;
     evutil_socket_t             peer_fd;
     struct sockaddr_in          peer_addr;
 }; // struct UDPChannel

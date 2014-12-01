@@ -11,6 +11,7 @@
 #include <stdio.h>
 #include <getopt.h>
 #include <string.h>
+#include <unistd.h>
 #include <stdarg.h>
 #include <assert.h>
 #include <errno.h>
@@ -130,15 +131,16 @@ void error_on_tcp_channel_connection_bufferevent(
     short events,
     void *channel);
 
-/*
 static
-void read_udp_channel_connection(evutil_socket_t fd, short events, void *arg);
+void read_udp_channel_connection(   evutil_socket_t fd,
+                                    short events,
+                                    void *channel);
 
+inline
 static
 void error_on_udp_channel_connection(   evutil_socket_t fd,
                                         short events,
-                                        void *arg);
-*/
+                                        void *channel);
 
 // RELAY CONNECTION
 inline
@@ -157,17 +159,17 @@ static
 void error_on_tcp_peer_connection_bufferevent(  struct bufferevent *buffevent,
                                                 short events,
                                                 void *channels);
-/*
+
 static
 void read_udp_peer_connection(  evutil_socket_t fd,
                                 short events,
-                                void* channel);
+                                void *channel);
 
+inline
 static
 void error_on_udp_peer_connection(  evutil_socket_t fd,
                                     short events,
                                     void *channel);
-*/
 
 // OTHER
 /*static
@@ -629,6 +631,52 @@ void error_on_tcp_channel_connection_bufferevent(
     }
 }
 
+static
+void read_udp_channel_connection(   evutil_socket_t fd,
+                                    short events,
+                                    void *channel)
+{
+    union Channel *chan = (union Channel *) channel;
+
+    struct sockaddr_in addr;
+    socklen_t addr_size = sizeof(addr);
+    uint8_t buffer[BUFFER_LIMIT];
+    int32_t buff_size;
+    if((buff_size = recvfrom(   fd,
+                                &buffer,
+                                BUFFER_LIMIT,
+                                0,
+                                (struct sockaddr *) &addr,
+                                &addr_size)) == -1)
+    {
+        error_on_udp_channel_connection(fd, events, channel);
+        return;
+    }
+
+    if(sendto(  chan->udp.peer_fd,
+                buffer,
+                buff_size,
+                0,
+                (struct sockaddr *) &chan->udp.peer_addr,
+                addr_size) == -1)
+    {
+        error_on_udp_channel_connection(fd, events, channel);
+        return;
+    }
+
+    chan->base.alive = 2;
+}
+
+inline
+static
+void error_on_udp_channel_connection(   evutil_socket_t fd,
+                                        short events,
+                                        void *channel)
+{
+    debug("udp channel connection: error");
+    teardown_channel((union Channel *) channel, 1);
+}
+
 inline
 static
 void teardown_relay_connections(void)
@@ -683,6 +731,53 @@ void error_on_tcp_peer_connection_bufferevent(  struct bufferevent *buffevent,
         teardown_channel((union Channel *) channel, 1);
     }
 }
+
+static
+void read_udp_peer_connection(  evutil_socket_t fd,
+                                short events,
+                                void *channel)
+{
+    union Channel *chan = (union Channel *) channel;
+
+    struct sockaddr_in addr;
+    socklen_t addr_size = sizeof(addr);
+    uint8_t buffer[BUFFER_LIMIT];
+    int32_t buff_size;
+    if((buff_size = recvfrom(   fd,
+                                &buffer,
+                                BUFFER_LIMIT,
+                                0,
+                                (struct sockaddr *) &addr,
+                                &addr_size)) == -1)
+    {
+        error_on_udp_peer_connection(fd, events, channel);
+        return;
+    }
+
+    if(sendto(  chan->udp.channel_fd,
+                buffer,
+                buff_size,
+                0,
+                (struct sockaddr *) &chan->udp.channel_addr,
+                addr_size) == -1)
+    {
+        error_on_udp_peer_connection(fd, events, channel);
+        return;
+    }
+
+    chan->base.alive = 2;
+}
+
+inline
+static
+void error_on_udp_peer_connection(  evutil_socket_t fd,
+                                    short events,
+                                    void *channel)
+{
+    debug("udp peer connection: error");
+    teardown_channel((union Channel *) channel, 1);
+}
+
 
 inline
 static
@@ -740,6 +835,7 @@ union Channel *setup_channel(struct MessageOpenChannel *ope)
     {
         case IPPROTO_TCP:
             {
+                debug("channel: setting up tcp");
                 channel->tcp.peer_buffers = bufferevent_socket_new(
                     context.events,
                     -1,
@@ -825,6 +921,112 @@ union Channel *setup_channel(struct MessageOpenChannel *ope)
             }
             break;
 
+        case IPPROTO_UDP:
+            {
+                debug("channel: setting up udp");
+                char port_buf[6];
+                struct evutil_addrinfo hints; memset(&hints, 0, sizeof(hints));
+                struct evutil_addrinfo *answer = NULL;
+                int err;
+
+                // PEER
+                evutil_snprintf(port_buf,
+                                sizeof(port_buf),
+                                "%d",
+                                ntohs(ope->port));
+
+                hints.ai_family = AF_INET;
+                hints.ai_socktype = SOCK_DGRAM;
+                hints.ai_protocol = IPPROTO_UDP;
+                hints.ai_flags = EVUTIL_AI_ADDRCONFIG;
+                err = evutil_getaddrinfo(   options.host,
+                                            port_buf,
+                                            &hints,
+                                            &answer);
+
+                if(err != 0)
+                {
+                    debug(  "channel: getaddrinfo(%s): %s",
+                            options.relay_host,
+                            evutil_gai_strerror(err));
+
+                    teardown_channel(channel, 1);
+                    return 0;
+                }
+
+                channel->udp.peer_fd = socket(  answer->ai_family,
+                                                answer->ai_socktype,
+                                                answer->ai_protocol);
+                //make nonblocking?
+                memcpy( &channel->udp.peer_addr,
+                        answer->ai_addr,
+                        sizeof(struct sockaddr_in));
+
+                channel->udp.peer_event = event_new(context.events,
+                                                    channel->udp.peer_fd,
+                                                    EV_READ | EV_PERSIST,
+                                                    read_udp_peer_connection,
+                                                    channel);
+
+                event_add(channel->udp.peer_event, 0);
+
+                // CHANNEL
+                answer = 0;
+                evutil_snprintf(port_buf,
+                                sizeof(port_buf),
+                                "%d",
+                                options.control_port);
+
+                hints.ai_family = AF_INET;
+                hints.ai_socktype = SOCK_DGRAM;
+                hints.ai_protocol = IPPROTO_UDP;
+                hints.ai_flags = EVUTIL_AI_ADDRCONFIG;
+                err = evutil_getaddrinfo(   options.relay_host,
+                                            port_buf,
+                                            &hints,
+                                            &answer);
+
+                if(err != 0)
+                {
+                    debug(  "channel: getaddrinfo(%s): %s",
+                            options.host,
+                            evutil_gai_strerror(err));
+
+                    teardown_channel(channel, 1);
+                    return 0;
+                }
+
+                channel->udp.channel_fd = socket(   answer->ai_family,
+                                                    answer->ai_socktype,
+                                                    answer->ai_protocol);
+                //make nonblocking?
+                memcpy( &channel->udp.channel_addr,
+                        answer->ai_addr,
+                        sizeof(struct sockaddr_in));
+
+                channel->udp.channel_event = event_new(
+                    context.events,
+                    channel->udp.channel_fd,
+                    EV_READ | EV_PERSIST,
+                    read_udp_channel_connection,
+                    channel);
+
+                event_add(channel->udp.channel_event, 0);
+
+                if(sendto(  channel->udp.channel_fd,
+                            &res,
+                            sizeof(res),
+                            0,
+                            (struct sockaddr *) &channel->udp.channel_addr,
+                            sizeof(struct sockaddr_in)) == -1)
+                {
+                    debug("channel: error on sendto");
+                    teardown_channel(channel, 1);
+                    return 0;
+                }
+            }
+            break;
+
         default:
             debug("channel: not yet implemented protocol %d", ope->proto);
             break;
@@ -863,6 +1065,28 @@ void teardown_channel(union Channel *channel, uint8_t close_channel)
                 {
                     bufferevent_free(channel->tcp.peer_buffers);
                     channel->tcp.peer_buffers = 0;
+                }
+            }
+            break;
+
+        case IPPROTO_UDP:
+            {
+                if(channel->udp.channel_event)
+                {
+                    event_del(channel->udp.channel_event);
+                    event_free(channel->udp.channel_event);
+                    close(channel->udp.channel_fd);
+                    channel->udp.channel_event = 0;
+                    channel->udp.channel_fd = 0;
+                }
+
+                if(channel->udp.peer_event)
+                {
+                    event_del(channel->udp.peer_event);
+                    event_free(channel->udp.peer_event);
+                    close(channel->udp.peer_fd);
+                    channel->udp.peer_event = 0;
+                    channel->udp.peer_fd = 0;
                 }
             }
             break;
