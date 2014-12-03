@@ -1,4 +1,4 @@
-CFLAGS=-O3 --std=gnu11 -flto -Wall -Werror -Isrc/ -levent -DNDEBUG
+CFLAGS=-O3 --std=gnu11 -Wall -Werror -Isrc/ -levent -DNDEBUG
 all: socket-server socket-relay
 
 %.o: %.c %.h

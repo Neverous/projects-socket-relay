@@ -819,7 +819,6 @@ void read_udp_channel_connection(evutil_socket_t fd, short events, void *args)
     }
 
     assert(channel->peer_fd);
-    channel->base.alive = 2;
     if(sendto(  channel->peer_fd,
                 buffer,
                 buff_size,
@@ -830,6 +829,8 @@ void read_udp_channel_connection(evutil_socket_t fd, short events, void *args)
         error_on_udp_peer_connection(fd, events, args);
         return;
     }
+
+    channel->base.alive = 2;
 }
 
 static
@@ -1161,8 +1162,6 @@ void read_udp_peer_connection(  evutil_socket_t fd,
     if(!channel->channel_fd)
         return;
 
-    channel->base.alive = 2;
-
     if(sendto(  channel->channel_fd,
                 buffer,
                 buff_size,
@@ -1173,6 +1172,8 @@ void read_udp_peer_connection(  evutil_socket_t fd,
         error_on_udp_peer_connection(fd, events, relay);
         return;
     }
+
+    channel->base.alive = 2;
 }
 
 static
