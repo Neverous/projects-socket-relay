@@ -207,14 +207,6 @@ void error_on_udp_peer_connection(  evutil_socket_t fd,
                                     short events,
                                     void *relay);
 
-// OTHER
-static
-void read_esp_connection(evutil_socket_t fd, short events, void *args);
-
-inline
-static
-void error_on_esp_connection(evutil_socket_t fd, short events, void *args);
-
 // CHANNELS
 inline
 static
@@ -239,10 +231,6 @@ struct UDPChannel *find_udp_channel_by_channel(const struct sockaddr_in *addr);
 inline
 static
 struct UDPChannel *find_udp_channel_by_peer(const struct sockaddr_in *addr);
-
-inline
-static
-struct ESPChannel *find_esp_channel(const struct sockaddr_in *addr);
 
 // EVENTS
 static
@@ -959,44 +947,6 @@ void setup_relay_connections(void)
             w += bytes;
         }
 
-        else if(!strcmp(proto, "esp"))
-        {
-            if(port_from || cur->port || esp)
-            {
-                debug("relay connections: invalid settings for esp protocol");
-                teardown_control_connection();
-                return;
-            }
-
-            esp = 1;
-            debug("relay connections: setting up esp relay");
-            cur->proto = IPPROTO_ESP;
-            struct sockaddr_in  relay; memset(&relay, 0, sizeof(relay));
-            relay.sin_family        = AF_INET;
-            relay.sin_addr.s_addr   = INADDR_ANY;
-            relay.sin_port          = 0;
-
-            int32_t efd = socket(AF_INET, SOCK_RAW, IPPROTO_ESP);
-            //evutil_make_socket_nonblocking(efd); maybe?
-            if(bind(efd, (struct sockaddr *) &relay, sizeof(relay)) == -1)
-            {
-                perror("bind");
-                teardown_control_connection();
-                return;
-            }
-
-            cur->esp_listener = event_new(  context.events,
-                                            efd,
-                                            EV_READ | EV_PERSIST,
-                                            read_esp_connection,
-                                            NULL);
-
-            event_add(cur->esp_listener, NULL);
-
-            ++ cur;
-            w += bytes;
-        }
-
         else
         {
             debug("relay connections: unsupported protocol %s", proto);
@@ -1235,21 +1185,6 @@ void error_on_udp_peer_connection(  evutil_socket_t fd,
     teardown_control_connection();
 }
 
-
-static
-void read_esp_connection(evutil_socket_t fd, short events, void *relay)
-{
-    debug("Not yet implemented!");
-    return;
-}
-
-static
-void error_on_esp_connection(evutil_socket_t fd, short events, void *args)
-{
-    debug("esp connection: I don't really know what to do here.");
-    teardown_control_connection();
-}
-
 inline
 static
 void allocate_channels(void)
@@ -1427,25 +1362,6 @@ struct UDPChannel *find_udp_channel_by_peer(const struct sockaddr_in *addr)
     }
 
     return &cur->udp;
-}
-
-inline
-static
-struct ESPChannel *find_esp_channel(const struct sockaddr_in *addr)
-{
-    union Channel *cur = context.channels;
-    while(cur &&
-        (
-            cur->base.proto != IPPROTO_ESP
-        ||  memcmp( &cur->esp.peer_addr.sin_addr,
-                    &addr->sin_addr,
-                    sizeof(addr->sin_addr))
-        ))
-    {
-        cur = (union Channel *) cur->base.next;
-    }
-
-    return &cur->esp;
 }
 
 static

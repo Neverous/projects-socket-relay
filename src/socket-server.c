@@ -171,14 +171,6 @@ void error_on_udp_peer_connection(  evutil_socket_t fd,
                                     short events,
                                     void *channel);
 
-// OTHER
-/*static
-void read_esp_connection(evutil_socket_t fd, short events, void *args);
-
-static
-void error_on_exp_connection(evutil_socket_t fd, short events, void *args);
-*/
-
 // CHANNELS
 inline
 static

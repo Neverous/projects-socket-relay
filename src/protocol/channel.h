@@ -19,14 +19,6 @@ struct BaseChannel
     struct AuthenticationHash   token;
 }; // struct BaseChannel
 
-struct ESPChannel
-{
-    struct BaseChannel          base;
-
-    evutil_socket_t             peer_fd;
-    struct sockaddr_in          peer_addr;
-}; // struct ESPChannel
-
 struct UDPChannel
 {
     struct BaseChannel          base;
@@ -53,7 +45,6 @@ union Channel
     struct BaseChannel  base;
     struct UDPChannel   udp;
     struct TCPChannel   tcp;
-    struct ESPChannel   esp;
 };
 
 #endif // __CHANNEL_H__
