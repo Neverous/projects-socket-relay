@@ -43,7 +43,7 @@ const char *HELP    = "Usage: socket-server [options]\n\n\
     -c --control-port   PORT[=10000]        Control port of the relay.\n\
     -p --password       PASSWORD[=1234]     Password.";
 
-const char *SHORT_OPTIONS           = "hvr:s:c:d:p:";
+const char *SHORT_OPTIONS           = "hvr:s:c:p:";
 const struct option LONG_OPTIONS[] =
 {
     {"help",            no_argument,        0,  'h'}, // display help and usage
