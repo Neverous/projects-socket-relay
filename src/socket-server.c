@@ -18,6 +18,7 @@
 #include <time.h>
 #include <sys/socket.h>
 #include <netinet/tcp.h>
+#include <net/if.h>
 
 // libevent
 #include <event2/event.h>
@@ -36,22 +37,26 @@
 // Usage options and info
 const char *VERSION = "0.1.0";
 const char *HELP    = "Usage: socket-server [options]\n\n\
-    -h --help                               Display this usage information.\n\
-    -v --version                            Display program version.\n\
-    -r --relay-host     HOST[=localhost]    Address of the relay.\n\
-    -s --host           HOST[=localhost]    Destination address.\n\
-    -c --control-port   PORT[=10000]        Control port of the relay.\n\
-    -p --password       PASSWORD[=1234]     Password.";
+    -h --help                                   Display this usage information.\n\
+    -v --version                                Display program version.\n\
+    -i --input-interface    INTERFACE           Input interface to bind to.\n\
+    -o --output-interface   INTERFACE           Output interface to bind to.\n\
+    -r --relay-host         HOST[=localhost]    Address of the relay.\n\
+    -s --host               HOST[=localhost]    Destination address.\n\
+    -c --control-port       PORT[=10000]        Control port of the relay.\n\
+    -p --password           PASSWORD[=1234]     Password.";
 
-const char *SHORT_OPTIONS           = "hvr:s:c:p:";
+const char *SHORT_OPTIONS           = "hvi:o:r:s:c:p:";
 const struct option LONG_OPTIONS[] =
 {
-    {"help",            no_argument,        0,  'h'}, // display help and usage
-    {"version",         no_argument,        0,  'v'}, // display version
-    {"relay-host",      required_argument,  0,  'r'}, // relay address
-    {"host",            required_argument,  0,  's'}, // destination address
-    {"control-port",    required_argument,  0,  'c'}, // relay control port
-    {"password",        required_argument,  0,  'p'}, // password
+    {"help",                no_argument,        0,  'h'}, // display help and usage
+    {"version",             no_argument,        0,  'v'}, // display version
+    {"input-interface",     required_argument,  0,  'i'}, // input interface to bind to
+    {"output-interface",    required_argument,  0,  'o'}, // output interface to bind to
+    {"relay-host",          required_argument,  0,  'r'}, // relay address
+    {"host",                required_argument,  0,  's'}, // destination address
+    {"control-port",        required_argument,  0,  'c'}, // relay control port
+    {"password",            required_argument,  0,  'p'}, // password
     {NULL, 0, 0, 0},
 };
 
@@ -61,11 +66,15 @@ struct Options
     const char  *relay_host;
     const char  *host;
     const char  *password;
+    const char  *input_interface;
+    const char  *output_interface;
 } options = {
     10000,
     "localhost",
     "localhost",
     "1234",
+    NULL,
+    NULL,
 };
 
 struct Context
@@ -210,6 +219,12 @@ int32_t main(int32_t argc, char **argv)
             case 'v': printf("socket-server %s\n", VERSION);
                 return 0;
 
+            case 'i': options.input_interface = optarg;
+                break;
+
+            case 'o': options.output_interface = optarg;
+                break;
+
             case 'r': options.relay_host = optarg;
                 break;
 
@@ -234,23 +249,35 @@ int32_t main(int32_t argc, char **argv)
     }
 
     context.dns = evdns_base_new(context.events, 1);
-
     context.control_buffers = bufferevent_socket_new(   context.events,
                                                         -1,
                                                         BEV_OPT_CLOSE_ON_FREE);
 
-    int32_t one = 1;
-    setsockopt( bufferevent_getfd(context.control_buffers),
-                IPPROTO_TCP,
-                TCP_NODELAY,
-                &one,
-                sizeof(one));
+    evutil_socket_t fd = bufferevent_getfd(context.control_buffers);
+    if(options.input_interface)
+    {
+        debug("binding to interface %s", options.input_interface);
+        struct ifreq ifr; memset(&ifr, 0, sizeof(ifr));
+        strncpy(ifr.ifr_name, options.input_interface, sizeof(ifr.ifr_name));
+        if(setsockopt(fd, SOL_SOCKET, SO_BINDTODEVICE, &ifr, sizeof(ifr)) == -1)
+        {
+            perror("setsockopt");
+            return 3;
+        }
+    }
 
     if(!context.control_buffers)
     {
         perror("bufferevent_socket_new");
-        return 3;
+        return 4;
     }
+
+    int32_t one = 1;
+    setsockopt( fd,
+                IPPROTO_TCP,
+                TCP_NODELAY,
+                &one,
+                sizeof(one));
 
     bufferevent_setwatermark(   context.control_buffers,
                                 EV_READ | EV_WRITE,
@@ -840,13 +867,37 @@ union Channel *setup_channel(struct MessageOpenChannel *ope)
                     return 0;
                 }
 
-                int32_t one = 1;
-                setsockopt( bufferevent_getfd(channel->tcp.peer_buffers),
-                        IPPROTO_TCP,
-                        TCP_NODELAY,
-                        &one,
-                        sizeof(one));
+                evutil_socket_t pfd =
+                    bufferevent_getfd(channel->tcp.peer_buffers);
 
+                if(options.output_interface)
+                {
+                    debug(  "channel: binding to interface %s",
+                            options.output_interface);
+
+                    struct ifreq ifr; memset(&ifr, 0, sizeof(ifr));
+                    strncpy(ifr.ifr_name,
+                            options.output_interface,
+                            sizeof(ifr.ifr_name));
+
+                    if(setsockopt(  pfd,
+                                    SOL_SOCKET,
+                                    SO_BINDTODEVICE,
+                                    &ifr,
+                                    sizeof(ifr)) == -1)
+                    {
+                        perror("setsockopt");
+                        teardown_channel(channel, 1);
+                        return 0;
+                    }
+                }
+
+                int32_t one = 1;
+                setsockopt( pfd,
+                            IPPROTO_TCP,
+                            TCP_NODELAY,
+                            &one,
+                            sizeof(one));
 
                 bufferevent_setwatermark(   channel->tcp.peer_buffers,
                                             EV_READ | EV_WRITE,
@@ -880,11 +931,34 @@ union Channel *setup_channel(struct MessageOpenChannel *ope)
                     return 0;
                 }
 
-                setsockopt( bufferevent_getfd(channel->tcp.channel_buffers),
-                        IPPROTO_TCP,
-                        TCP_NODELAY,
-                        &one,
-                        sizeof(one));
+                evutil_socket_t cfd =
+                    bufferevent_getfd(channel->tcp.channel_buffers);
+
+                if(options.input_interface)
+                {
+                    debug("binding to interface %s", options.input_interface);
+                    struct ifreq ifr; memset(&ifr, 0, sizeof(ifr));
+                    strncpy(ifr.ifr_name,
+                            options.input_interface,
+                            sizeof(ifr.ifr_name));
+
+                    if(setsockopt(  cfd,
+                                    SOL_SOCKET,
+                                    SO_BINDTODEVICE,
+                                    &ifr,
+                                    sizeof(ifr)) == -1)
+                    {
+                        perror("setsockopt");
+                        teardown_channel(channel, 1);
+                        return 0;
+                    }
+                }
+
+                setsockopt( cfd,
+                            IPPROTO_TCP,
+                            TCP_NODELAY,
+                            &one,
+                            sizeof(one));
 
                 bufferevent_setwatermark(   channel->tcp.channel_buffers,
                                             EV_READ | EV_WRITE,
@@ -946,10 +1020,33 @@ union Channel *setup_channel(struct MessageOpenChannel *ope)
                     return 0;
                 }
 
+                debug("channel: got address info");
                 channel->udp.peer_fd = socket(  answer->ai_family,
                                                 answer->ai_socktype,
                                                 answer->ai_protocol);
                 //make nonblocking?
+                if(options.output_interface)
+                {
+                    debug(  "channel: binding to interface %s",
+                            options.output_interface);
+
+                    struct ifreq ifr; memset(&ifr, 0, sizeof(ifr));
+                    strncpy(ifr.ifr_name,
+                            options.output_interface,
+                            sizeof(ifr.ifr_name));
+
+                    if(setsockopt(  channel->udp.peer_fd,
+                                    SOL_SOCKET,
+                                    SO_BINDTODEVICE,
+                                    &ifr,
+                                    sizeof(ifr)) == -1)
+                    {
+                        perror("setsockopt");
+                        teardown_channel(channel, 1);
+                        return 0;
+                    }
+                }
+
                 memcpy( &channel->udp.peer_addr,
                         answer->ai_addr,
                         sizeof(struct sockaddr_in));
@@ -988,10 +1085,33 @@ union Channel *setup_channel(struct MessageOpenChannel *ope)
                     return 0;
                 }
 
+                debug("channel: got address info");
                 channel->udp.channel_fd = socket(   answer->ai_family,
                                                     answer->ai_socktype,
                                                     answer->ai_protocol);
                 //make nonblocking?
+                if(options.input_interface)
+                {
+                    debug(  "channel: binding to interface %s",
+                            options.input_interface);
+
+                    struct ifreq ifr; memset(&ifr, 0, sizeof(ifr));
+                    strncpy(ifr.ifr_name,
+                            options.input_interface,
+                            sizeof(ifr.ifr_name));
+
+                    if(setsockopt(  channel->udp.channel_fd,
+                                    SOL_SOCKET,
+                                    SO_BINDTODEVICE,
+                                    &ifr,
+                                    sizeof(ifr)) == -1)
+                    {
+                        perror("setsockopt");
+                        teardown_channel(channel, 1);
+                        return 0;
+                    }
+                }
+
                 memcpy( &channel->udp.channel_addr,
                         answer->ai_addr,
                         sizeof(struct sockaddr_in));

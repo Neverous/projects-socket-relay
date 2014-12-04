@@ -19,6 +19,7 @@
 #include <sys/socket.h>
 #include <netinet/tcp.h>
 #include <arpa/inet.h>
+#include <net/if.h>
 
 // libevent
 #include <event2/listener.h>
@@ -38,18 +39,20 @@ const char *VERSION = "0.1.0";
 const char *HELP    = "Usage: socket-relay [options]\n\n\
     -h --help                                               Display this usage information.\n\
     -v --version                                            Display version.\n\
+    -i --interface      INTERFACE                           Network interface to use.\n\
     -c --control-port   PORT[=10000]                        Control port.\n\
     -r --relay-ports    PORTS[=tcp:10080:80,tcp:10022:22]   Relay ports.\n\
     -p --password       PASSWORD[=1234]                     Password.";
 
-const char *SHORT_OPTIONS           = "hvc:r:p:";
+const char *SHORT_OPTIONS           = "hvi:c:r:p:";
 const struct option LONG_OPTIONS[] =
 {
-    {"help",            no_argument,        0, 'h'}, // display help and usage
-    {"version",         no_argument,        0, 'v'}, // display version
-    {"control-port",    required_argument,  0, 'c'}, // control port
-    {"relay-ports",     required_argument,  0, 'r'}, // relay ports
-    {"password",        required_argument,  0, 'p'}, // password
+    {"help",            no_argument,        0,  'h'}, // display help and usage
+    {"version",         no_argument,        0,  'v'}, // display version
+    {"interface",       required_argument,  0,  'i'}, // interface
+    {"control-port",    required_argument,  0,  'c'}, // control port
+    {"relay-ports",     required_argument,  0,  'r'}, // relay ports
+    {"password",        required_argument,  0,  'p'}, // password
     {NULL, 0, 0, 0},
 };
 
@@ -58,10 +61,12 @@ struct Options
     int16_t     control_port;
     const char  *relay_ports;
     const char  *password;
+    const char  *interface;
 } options = {
     10000,
     "tcp:10080:80,tcp:10022:22",
     "1234",
+    NULL,
 };
 
 struct Context
@@ -254,6 +259,9 @@ int32_t main(int32_t argc, char **argv)
             case 'v': printf("socket-relay %s\n", VERSION);
                 return 0;
 
+            case 'i': options.interface = optarg;
+                break;
+
             case 'c': options.control_port = atoi(optarg);
                 break;
 
@@ -285,10 +293,23 @@ int32_t main(int32_t argc, char **argv)
         LEV_OPT_CLOSE_ON_FREE | LEV_OPT_REUSEABLE, -1,
         (struct sockaddr *) &relay, sizeof(relay));
 
+    if(options.interface)
+    {
+        debug("binding to interface %s", options.interface);
+        evutil_socket_t fd = evconnlistener_get_fd(context.listener.tcp);
+        struct ifreq ifr; memset(&ifr, 0, sizeof(ifr));
+        strncpy(ifr.ifr_name, options.interface, sizeof(ifr.ifr_name));
+        if(setsockopt(fd, SOL_SOCKET, SO_BINDTODEVICE, &ifr, sizeof(ifr)) == -1)
+        {
+            perror("setsockopt");
+            return 3;
+        }
+    }
+
     if(!context.listener.tcp)
     {
         perror("evconnlistener_new_bind");
-        return 3;
+        return 4;
     }
 
     evconnlistener_set_error_cb(    context.listener.tcp,
@@ -869,7 +890,6 @@ void setup_relay_connections(void)
     w = options.relay_ports;
     struct RelayListener *cur = context.relays;
     uint8_t udp = 0;
-    uint8_t esp = 0;
     for(int c = 0; c < context.relays_count; ++ c)
     {
         char        proto[4];
@@ -886,8 +906,8 @@ void setup_relay_connections(void)
 
         if(!strcmp(proto, "tcp"))
         {
-            debug("relay connections: setting up tcp relay %d -> %d",
-                port_from, cur->port);
+            debug(  "relay connections: setting up tcp relay %d -> %d",
+                    port_from, cur->port);
 
             cur->proto = IPPROTO_TCP;
             struct sockaddr_in  relay; memset(&relay, 0, sizeof(relay));
@@ -900,6 +920,27 @@ void setup_relay_connections(void)
                 accept_tcp_peer_connection, cur,
                 LEV_OPT_CLOSE_ON_FREE | LEV_OPT_REUSEABLE, -1,
                 (struct sockaddr *) &relay, sizeof(relay));
+
+            if(options.interface)
+            {
+                debug(  "relay connections: binding to interface %s",
+                        options.interface);
+                evutil_socket_t fd =
+                    evconnlistener_get_fd(cur->tcp_listener);
+
+                struct ifreq ifr; memset(&ifr, 0, sizeof(ifr));
+                strncpy(ifr.ifr_name, options.interface, sizeof(ifr.ifr_name));
+                if(setsockopt(  fd,
+                                SOL_SOCKET,
+                                SO_BINDTODEVICE,
+                                &ifr,
+                                sizeof(ifr)) == -1)
+                {
+                    perror("setsockopt");
+                    teardown_control_connection();
+                    return;
+                }
+            }
 
             if(!cur->tcp_listener)
             {
@@ -927,8 +968,27 @@ void setup_relay_connections(void)
             relay.sin_addr.s_addr   = INADDR_ANY;
             relay.sin_port          = htons(port_from);
 
-            int32_t ufd = socket(AF_INET, SOCK_DGRAM, 0);
+            evutil_socket_t ufd = socket(AF_INET, SOCK_DGRAM, 0);
             //evutil_make_socket_nonblocking(ufd); maybe?
+            if(options.interface)
+            {
+                debug(  "relay connections: binding to interface %s",
+                        options.interface);
+
+                struct ifreq ifr; memset(&ifr, 0, sizeof(ifr));
+                strncpy(ifr.ifr_name, options.interface, sizeof(ifr.ifr_name));
+                if(setsockopt(  ufd,
+                                SOL_SOCKET,
+                                SO_BINDTODEVICE,
+                                &ifr,
+                                sizeof(ifr)) == -1)
+                {
+                    perror("setsockopt");
+                    teardown_control_connection();
+                    return;
+                }
+            }
+
             if(bind(ufd, (struct sockaddr *) &relay, sizeof(relay)) == -1)
             {
                 perror("bind");
@@ -967,6 +1027,25 @@ void setup_relay_connections(void)
 
         int32_t ufd = socket(AF_INET, SOCK_DGRAM, 0);
         //evutil_make_socket_nonblocking(ufd); maybe?
+        if(options.interface)
+        {
+            debug(  "relay connections: binding to interface %s",
+                    options.interface);
+
+            struct ifreq ifr; memset(&ifr, 0, sizeof(ifr));
+            strncpy(ifr.ifr_name, options.interface, sizeof(ifr.ifr_name));
+            if(setsockopt(  ufd,
+                            SOL_SOCKET,
+                            SO_BINDTODEVICE,
+                            &ifr,
+                            sizeof(ifr)) == -1)
+            {
+                perror("setsockopt");
+                teardown_control_connection();
+                return;
+            }
+        }
+
         if(bind(ufd, (struct sockaddr *) &relay, sizeof(relay)) == -1)
         {
             perror("bind");
@@ -981,12 +1060,6 @@ void setup_relay_connections(void)
                                             NULL);
 
         event_add(context.listener.udp, NULL);
-    }
-
-    if(esp)
-    {
-        debug("relay connections: setting up esp channels port");
-        debug("relay connections: esp channel port - nothing to set up");
     }
 }
 
