@@ -7,10 +7,12 @@ all: socket-server socket-relay
 socket-server: src/socket-server.c src/protocol/sha2.c
 	mkdir -p bin
 	${CC} ${CFLAGS} -o bin/socket-server $^
+	strip bin/socket-server
 
 socket-relay: src/socket-relay.c src/protocol/sha2.c
 	mkdir -p bin
 	${CC} ${CFLAGS} -o bin/socket-relay $^
+	strip bin/socket-relay
 
 clean:
 	rm -f *.o */*.o */*/*.o bin/*
