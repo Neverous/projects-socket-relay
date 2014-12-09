@@ -14,7 +14,8 @@
 
 #include "protocol/channel.h"
 
-#define BUFFER_LIMIT 262144
+#define BUFFER_LIMIT    262144
+#define CHANNELS_LIMIT  1024
 
 const char *VERSION = "0.1.0";
 
@@ -183,10 +184,23 @@ inline
 static
 void allocate_channels(void)
 {
+    if(context.allocated_channels >= CHANNELS_LIMIT)
+    {
+        debug("allocate channels: channels limit reached!");
+        return;
+    }
+
     assert(!context.free_channels);
-    int32_t count = 8192 / sizeof(union Channel);
+    const int32_t count = 8192 / sizeof(union Channel);
     context.free_channels =
         (union Channel *) malloc(count * sizeof(union Channel));
+
+    assert(context.free_channels);
+    if(!context.free_channels)
+    {
+        debug("allocate channels: malloc failed!");
+        return;
+    }
 
     memset(context.free_channels, 0, count * sizeof(union Channel));
     union Channel *cur = context.free_channels;
@@ -199,6 +213,7 @@ void allocate_channels(void)
     context.free_channels->base.prev = NULL;
     -- cur;
     cur->base.next = NULL;
+    context.allocated_channels += count;
     return;
 }
 

@@ -47,13 +47,13 @@ const char *HELP    = "Usage: socket-relay [options]\n\n\
 const char *SHORT_OPTIONS           = "hvi:c:r:p:";
 const struct option LONG_OPTIONS[] =
 {
-    {"help",            no_argument,        0,  'h'}, // display help and usage
-    {"version",         no_argument,        0,  'v'}, // display version
-    {"interface",       required_argument,  0,  'i'}, // interface
-    {"control-port",    required_argument,  0,  'c'}, // control port
-    {"relay-ports",     required_argument,  0,  'r'}, // relay ports
-    {"password",        required_argument,  0,  'p'}, // password
-    {NULL, 0, 0, 0},
+    {"help",            no_argument,        NULL,   'h'}, // display help and usage
+    {"version",         no_argument,        NULL,   'v'}, // display version
+    {"interface",       required_argument,  NULL,   'i'}, // interface
+    {"control-port",    required_argument,  NULL,   'c'}, // control port
+    {"relay-ports",     required_argument,  NULL,   'r'}, // relay ports
+    {"password",        required_argument,  NULL,   'p'}, // password
+    {NULL,              0,                  NULL,   0},
 };
 
 struct Options
@@ -89,6 +89,7 @@ struct Context
     uint64_t                    last_alive;
     struct event                *keepalive;
 
+    int32_t                 allocated_channels;
     union Channel           *channels;
     union Channel           *free_channels;
 
@@ -190,7 +191,7 @@ void teardown_channel(union Channel *channel, uint8_t close_channel);
 int32_t main(int32_t argc, char **argv)
 {
     int32_t o;
-    while((o = getopt_long(argc, argv, SHORT_OPTIONS, LONG_OPTIONS, 0)) != -1)
+    while((o = getopt_long(argc, argv, SHORT_OPTIONS, LONG_OPTIONS, NULL)) != -1)
         switch(o)
         {
             case 'h': puts(HELP);
@@ -290,15 +291,15 @@ int32_t main(int32_t argc, char **argv)
     debug("main: shutting down");
     event_del(stats);
     event_free(stats);
-    stats = 0;
+    stats = NULL;
 
     event_del(cleanup);
     event_free(cleanup);
-    cleanup = 0;
+    cleanup = NULL;
 
     event_del(context.keepalive);
     event_free(context.keepalive);
-    context.keepalive = 0;
+    context.keepalive = NULL;
     return 0;
 }
 
@@ -515,9 +516,9 @@ void teardown_control_connection(void)
     teardown_relay_connections();
 
     bufferevent_free(context.control_buffers);
-    context.control_buffers = 0;
+    context.control_buffers = NULL;
     evconnlistener_free(context.listener.tcp);
-    context.listener.tcp = 0;
+    context.listener.tcp = NULL;
 
     event_base_loopexit(context.events, NULL);
 }
@@ -903,14 +904,14 @@ void teardown_relay_connections(void)
             case IPPROTO_TCP:
                 {
                     evconnlistener_free(cur->tcp_listener);
-                    cur->tcp_listener = 0;
+                    cur->tcp_listener = NULL;
                 }
                 break;
 
             case IPPROTO_UDP:
                 {
                     event_free(cur->udp_listener);
-                    cur->udp_listener = 0;
+                    cur->udp_listener = NULL;
                 }
                 break;
 
@@ -961,6 +962,13 @@ void accept_tcp_peer_connection(struct evconnlistener *listener,
 
     struct RelayListener *relay = (struct RelayListener *) relay_listener;
     union Channel *channel = request_channel(relay->proto, relay->port);
+    if(!channel)
+    {
+        debug("tcp peer connection: no channels left!");
+        bufferevent_free(buffevent);
+        return;
+    }
+
     channel->tcp.peer_buffers = buffevent;
     bufferevent_setcb(
         buffevent,
@@ -1008,6 +1016,12 @@ void read_udp_peer_connection(  evutil_socket_t fd,
     if(!channel)
     {
         union Channel *chan = request_channel(listener->proto, listener->port);
+        if(!chan)
+        {
+            debug("udp peer connection: no channels left!");
+            return;
+        }
+
         chan->udp.peer_fd = fd;
         memcpy(&chan->udp.peer_addr, &addr, addr_size);
         return;
@@ -1046,6 +1060,9 @@ union Channel *request_channel(uint8_t proto, uint16_t port)
     debug("channel: request %d %d", proto, port);
     if(!context.free_channels)
         allocate_channels();
+
+    if(!context.free_channels)
+        return NULL;
 
     assert(context.free_channels);
     union Channel *channel = context.free_channels;
@@ -1103,13 +1120,13 @@ void teardown_channel(union Channel *channel, uint8_t close_channel)
                 if(channel->tcp.channel_buffers)
                 {
                     bufferevent_free(channel->tcp.channel_buffers);
-                    channel->tcp.channel_buffers = 0;
+                    channel->tcp.channel_buffers = NULL;
                 }
 
                 if(channel->tcp.peer_buffers)
                 {
                     bufferevent_free(channel->tcp.peer_buffers);
-                    channel->tcp.peer_buffers = 0;
+                    channel->tcp.peer_buffers = NULL;
                 }
             }
             break;

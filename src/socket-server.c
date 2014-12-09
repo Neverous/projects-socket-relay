@@ -46,15 +46,15 @@ const char *HELP    = "Usage: socket-server [options]\n\n\
 const char *SHORT_OPTIONS           = "hvi:o:r:s:c:p:";
 const struct option LONG_OPTIONS[] =
 {
-    {"help",                no_argument,        0,  'h'}, // display help and usage
-    {"version",             no_argument,        0,  'v'}, // display version
-    {"input-interface",     required_argument,  0,  'i'}, // input interface to bind to
-    {"output-interface",    required_argument,  0,  'o'}, // output interface to bind to
-    {"relay-host",          required_argument,  0,  'r'}, // relay address
-    {"host",                required_argument,  0,  's'}, // destination address
-    {"control-port",        required_argument,  0,  'c'}, // relay control port
-    {"password",            required_argument,  0,  'p'}, // password
-    {NULL, 0, 0, 0},
+    {"help",                no_argument,        NULL,   'h'}, // display help and usage
+    {"version",             no_argument,        NULL,   'v'}, // display version
+    {"input-interface",     required_argument,  NULL,   'i'}, // input interface to bind to
+    {"output-interface",    required_argument,  NULL,   'o'}, // output interface to bind to
+    {"relay-host",          required_argument,  NULL,   'r'}, // relay address
+    {"host",                required_argument,  NULL,   's'}, // destination address
+    {"control-port",        required_argument,  NULL,   'c'}, // relay control port
+    {"password",            required_argument,  NULL,   'p'}, // password
+    {NULL,                  0,                  NULL,   0},
 };
 
 struct Options
@@ -88,6 +88,7 @@ struct Context
     uint64_t                    last_alive;
     struct event                *keepalive;
 
+    int32_t         allocated_channels;
     union Channel   *channels;
     union Channel   *free_channels;
 } context;
@@ -151,7 +152,7 @@ void teardown_channel(union Channel *channel, uint8_t close_channel);
 int32_t main(int32_t argc, char **argv)
 {
     int32_t o;
-    while((o = getopt_long(argc, argv, SHORT_OPTIONS, LONG_OPTIONS, 0)) != -1)
+    while((o = getopt_long(argc, argv, SHORT_OPTIONS, LONG_OPTIONS, NULL)) != -1)
         switch(o)
         {
             case 'h': puts(HELP);
@@ -273,15 +274,15 @@ int32_t main(int32_t argc, char **argv)
     debug("main: shutting down");
     event_del(stats);
     event_free(stats);
-    stats = 0;
+    stats = NULL;
 
     event_del(cleanup);
     event_free(cleanup);
-    cleanup = 0;
+    cleanup = NULL;
 
     event_del(context.keepalive);
     event_free(context.keepalive);
-    context.keepalive = 0;
+    context.keepalive = NULL;
     return 0;
 }
 
@@ -473,7 +474,7 @@ void teardown_control_connection(void)
     teardown_relay_connections();
 
     bufferevent_free(context.control_buffers);
-    context.control_buffers = 0;
+    context.control_buffers = NULL;
 
     event_base_loopexit(context.events, NULL);
 }
@@ -588,6 +589,9 @@ union Channel *setup_channel(struct MessageOpenChannel *ope)
     if(!context.free_channels)
         allocate_channels();
 
+    if(!context.free_channels)
+        return NULL;
+
     assert(context.free_channels);
     union Channel *channel = context.free_channels;
     context.free_channels = (union Channel *) context.free_channels->base.next;
@@ -623,7 +627,7 @@ union Channel *setup_channel(struct MessageOpenChannel *ope)
                 {
                     perror("bufferevent_socket_new");
                     teardown_channel(channel, 1);
-                    return 0;
+                    return NULL;
                 }
 
                 evutil_socket_t pfd =
@@ -647,7 +651,7 @@ union Channel *setup_channel(struct MessageOpenChannel *ope)
                     {
                         perror("setsockopt");
                         teardown_channel(channel, 1);
-                        return 0;
+                        return NULL;
                     }
                 }
 
@@ -687,7 +691,7 @@ union Channel *setup_channel(struct MessageOpenChannel *ope)
                 {
                     perror("bufferevent_socket_new");
                     teardown_channel(channel, 1);
-                    return 0;
+                    return NULL;
                 }
 
                 evutil_socket_t cfd =
@@ -709,7 +713,7 @@ union Channel *setup_channel(struct MessageOpenChannel *ope)
                     {
                         perror("setsockopt");
                         teardown_channel(channel, 1);
-                        return 0;
+                        return NULL;
                     }
                 }
 
@@ -776,7 +780,7 @@ union Channel *setup_channel(struct MessageOpenChannel *ope)
                             evutil_gai_strerror(err));
 
                     teardown_channel(channel, 1);
-                    return 0;
+                    return NULL;
                 }
 
                 debug("channel: got address info");
@@ -802,7 +806,7 @@ union Channel *setup_channel(struct MessageOpenChannel *ope)
                     {
                         perror("setsockopt");
                         teardown_channel(channel, 1);
-                        return 0;
+                        return NULL;
                     }
                 }
 
@@ -816,10 +820,10 @@ union Channel *setup_channel(struct MessageOpenChannel *ope)
                                                     read_udp_peer_connection,
                                                     channel);
 
-                event_add(channel->udp.peer_event, 0);
+                event_add(channel->udp.peer_event, NULL);
 
                 // CHANNEL
-                answer = 0;
+                answer = NULL;
                 evutil_snprintf(port_buf,
                                 sizeof(port_buf),
                                 "%d",
@@ -841,7 +845,7 @@ union Channel *setup_channel(struct MessageOpenChannel *ope)
                             evutil_gai_strerror(err));
 
                     teardown_channel(channel, 1);
-                    return 0;
+                    return NULL;
                 }
 
                 debug("channel: got address info");
@@ -867,7 +871,7 @@ union Channel *setup_channel(struct MessageOpenChannel *ope)
                     {
                         perror("setsockopt");
                         teardown_channel(channel, 1);
-                        return 0;
+                        return NULL;
                     }
                 }
 
@@ -882,7 +886,7 @@ union Channel *setup_channel(struct MessageOpenChannel *ope)
                     read_udp_channel_connection,
                     channel);
 
-                event_add(channel->udp.channel_event, 0);
+                event_add(channel->udp.channel_event, NULL);
 
                 if(sendto(  channel->udp.channel_fd,
                             &res,
@@ -893,7 +897,7 @@ union Channel *setup_channel(struct MessageOpenChannel *ope)
                 {
                     debug("channel: error on sendto");
                     teardown_channel(channel, 1);
-                    return 0;
+                    return NULL;
                 }
             }
             break;
@@ -929,13 +933,13 @@ void teardown_channel(union Channel *channel, uint8_t close_channel)
                 if(channel->tcp.channel_buffers)
                 {
                     bufferevent_free(channel->tcp.channel_buffers);
-                    channel->tcp.channel_buffers = 0;
+                    channel->tcp.channel_buffers = NULL;
                 }
 
                 if(channel->tcp.peer_buffers)
                 {
                     bufferevent_free(channel->tcp.peer_buffers);
-                    channel->tcp.peer_buffers = 0;
+                    channel->tcp.peer_buffers = NULL;
                 }
             }
             break;
@@ -947,7 +951,7 @@ void teardown_channel(union Channel *channel, uint8_t close_channel)
                     event_del(channel->udp.channel_event);
                     event_free(channel->udp.channel_event);
                     close(channel->udp.channel_fd);
-                    channel->udp.channel_event = 0;
+                    channel->udp.channel_event = NULL;
                     channel->udp.channel_fd = 0;
                 }
 
@@ -956,7 +960,7 @@ void teardown_channel(union Channel *channel, uint8_t close_channel)
                     event_del(channel->udp.peer_event);
                     event_free(channel->udp.peer_event);
                     close(channel->udp.peer_fd);
-                    channel->udp.peer_event = 0;
+                    channel->udp.peer_event = NULL;
                     channel->udp.peer_fd = 0;
                 }
             }
@@ -968,7 +972,7 @@ void teardown_channel(union Channel *channel, uint8_t close_channel)
             break;
     }
 
-    channel->base.prev = 0;
+    channel->base.prev = NULL;
     channel->base.next = &context.free_channels->base;
     if(context.free_channels)
     {

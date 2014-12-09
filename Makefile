@@ -4,12 +4,12 @@ all: socket-server socket-relay
 %.o: %.c %.h
 	${CC} ${CFLAGS} -o $@ -c $<
 
-socket-server: src/socket-server.c src/protocol/sha2.c
+socket-server: src/socket-server.o src/protocol/sha2.o
 	mkdir -p bin
 	${CC} ${CFLAGS} -o bin/socket-server $^
 	strip bin/socket-server
 
-socket-relay: src/socket-relay.c src/protocol/sha2.c
+socket-relay: src/socket-relay.o src/protocol/sha2.o
 	mkdir -p bin
 	${CC} ${CFLAGS} -o bin/socket-relay $^
 	strip bin/socket-relay
