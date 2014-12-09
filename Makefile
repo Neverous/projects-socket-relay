@@ -14,5 +14,13 @@ socket-relay: src/socket-relay.o src/protocol/sha2.o
 	${CC} ${CFLAGS} -o bin/socket-relay $^
 	strip bin/socket-relay
 
+install: all
+	install -m 0755 bin/socket-relay /usr/local/bin/
+	install -m 0755 bin/socket-server /usr/local/bin/
+
+uninstall:
+	rm -f /usr/local/bin/socket-relay
+	rm -f /usr/local/bin/socket-server
+
 clean:
 	rm -f *.o */*.o */*/*.o bin/*
