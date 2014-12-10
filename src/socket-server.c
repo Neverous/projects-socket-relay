@@ -192,7 +192,9 @@ int32_t main(int32_t argc, char **argv)
 
     context.dns = evdns_base_new(context.events, 1);
     context.control_buffers = bufferevent_socket_new(   context.events,
-                                                        -1,
+                                                        socket( AF_INET,
+                                                                IPPROTO_TCP,
+                                                                0),
                                                         BEV_OPT_CLOSE_ON_FREE);
 
     if(!context.control_buffers)
@@ -621,7 +623,7 @@ union Channel *setup_channel(struct MessageOpenChannel *ope)
                 debug("channel: setting up tcp");
                 channel->tcp.peer_buffers = bufferevent_socket_new(
                     context.events,
-                    -1,
+                    socket(AF_INET, IPPROTO_TCP, 0),
                     BEV_OPT_CLOSE_ON_FREE);
 
                 if(!channel->tcp.peer_buffers)
@@ -686,7 +688,7 @@ union Channel *setup_channel(struct MessageOpenChannel *ope)
 
                 channel->tcp.channel_buffers = bufferevent_socket_new(
                     context.events,
-                    -1,
+                    socket(AF_INET, IPPROTO_TCP, 0),
                     BEV_OPT_CLOSE_ON_FREE);
 
                 if(!channel->tcp.channel_buffers)
