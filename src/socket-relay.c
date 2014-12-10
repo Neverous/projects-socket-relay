@@ -236,8 +236,8 @@ int32_t main(int32_t argc, char **argv)
 
     if(options.interface)
     {
-        debug("binding to interface %s", options.interface);
         evutil_socket_t fd = evconnlistener_get_fd(context.listener.tcp);
+        debug("binding fd:%d to interface %s", fd, options.interface);
         struct ifreq ifr; memset(&ifr, 0, sizeof(ifr));
         strncpy(ifr.ifr_name, options.interface, sizeof(ifr.ifr_name));
         if(setsockopt(fd, SOL_SOCKET, SO_BINDTODEVICE, &ifr, sizeof(ifr)) == -1)
@@ -708,7 +708,9 @@ void setup_relay_connections(void)
     }
 
     debug("relay connections: setting up tcp channels port");
-    evconnlistener_set_cb(context.listener.tcp, accept_tcp_channel_connection, NULL);
+    evconnlistener_set_cb(  context.listener.tcp,
+                            accept_tcp_channel_connection,
+                            NULL);
 
     debug("relay connections: setting up %d relay ports", context.relays_count);
     context.relays =
@@ -751,10 +753,12 @@ void setup_relay_connections(void)
 
             if(options.interface)
             {
-                debug(  "relay connections: binding to interface %s",
-                        options.interface);
                 evutil_socket_t fd =
                     evconnlistener_get_fd(cur->tcp_listener);
+
+                debug(  "relay connections: binding fd:%d to interface %s",
+                        fd,
+                        options.interface);
 
                 struct ifreq ifr; memset(&ifr, 0, sizeof(ifr));
                 strncpy(ifr.ifr_name, options.interface, sizeof(ifr.ifr_name));
@@ -800,7 +804,8 @@ void setup_relay_connections(void)
             //evutil_make_socket_nonblocking(ufd); maybe?
             if(options.interface)
             {
-                debug(  "relay connections: binding to interface %s",
+                debug(  "relay connections: binding fd:%d to interface %s",
+                        ufd,
                         options.interface);
 
                 struct ifreq ifr; memset(&ifr, 0, sizeof(ifr));
@@ -857,7 +862,8 @@ void setup_relay_connections(void)
         //evutil_make_socket_nonblocking(ufd); maybe?
         if(options.interface)
         {
-            debug(  "relay connections: binding to interface %s",
+            debug(  "relay connections: binding fd:%d to interface %s",
+                    ufd,
                     options.interface);
 
             struct ifreq ifr; memset(&ifr, 0, sizeof(ifr));

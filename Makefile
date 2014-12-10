@@ -1,4 +1,6 @@
 CFLAGS=-O3 --std=gnu11 -Wall -Werror -Isrc/ -levent -DNDEBUG
+STRIP?=strip
+
 all: socket-server socket-relay
 
 %.o: %.c %.h
@@ -7,12 +9,12 @@ all: socket-server socket-relay
 socket-server: src/socket-server.o src/protocol/sha2.o
 	mkdir -p bin
 	${CC} ${CFLAGS} -o bin/socket-server $^
-	strip bin/socket-server
+	${STRIP} bin/socket-server
 
 socket-relay: src/socket-relay.o src/protocol/sha2.o
 	mkdir -p bin
 	${CC} ${CFLAGS} -o bin/socket-relay $^
-	strip bin/socket-relay
+	${STRIP} bin/socket-relay
 
 install: all
 	install -m 0755 bin/socket-relay /usr/local/bin/

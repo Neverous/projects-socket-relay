@@ -195,23 +195,30 @@ int32_t main(int32_t argc, char **argv)
                                                         -1,
                                                         BEV_OPT_CLOSE_ON_FREE);
 
+    if(!context.control_buffers)
+    {
+        perror("bufferevent_socket_new");
+        return 3;
+    }
+
+    bufferevent_socket_connect_hostname(context.control_buffers,
+                                        context.dns,
+                                        AF_UNSPEC,
+                                        options.relay_host,
+                                        options.control_port);
+
+
     evutil_socket_t fd = bufferevent_getfd(context.control_buffers);
     if(options.input_interface)
     {
-        debug("binding to interface %s", options.input_interface);
+        debug("binding fd:%d to interface %s", fd, options.input_interface);
         struct ifreq ifr; memset(&ifr, 0, sizeof(ifr));
         strncpy(ifr.ifr_name, options.input_interface, sizeof(ifr.ifr_name));
         if(setsockopt(fd, SOL_SOCKET, SO_BINDTODEVICE, &ifr, sizeof(ifr)) == -1)
         {
             perror("setsockopt");
-            return 3;
+            return 4;
         }
-    }
-
-    if(!context.control_buffers)
-    {
-        perror("bufferevent_socket_new");
-        return 4;
     }
 
     int32_t one = 1;
@@ -233,12 +240,6 @@ int32_t main(int32_t argc, char **argv)
                         NULL);
 
     bufferevent_enable(context.control_buffers, EV_READ | EV_WRITE);
-    bufferevent_socket_connect_hostname(context.control_buffers,
-                                        context.dns,
-                                        AF_UNSPEC,
-                                        options.relay_host,
-                                        options.control_port);
-
     struct timeval timeout = { 30, 0 };
     context.msg_alive.type = ALIVE;
     context.alive = 1;
@@ -630,12 +631,19 @@ union Channel *setup_channel(struct MessageOpenChannel *ope)
                     return NULL;
                 }
 
+                bufferevent_socket_connect_hostname(channel->tcp.peer_buffers,
+                                                    context.dns,
+                                                    AF_UNSPEC,
+                                                    options.host,
+                                                    ntohs(ope->port));
+
                 evutil_socket_t pfd =
                     bufferevent_getfd(channel->tcp.peer_buffers);
 
                 if(options.output_interface)
                 {
-                    debug(  "channel: binding to interface %s",
+                    debug(  "channel: binding fd:%d to interface %s",
+                            pfd,
                             options.output_interface);
 
                     struct ifreq ifr; memset(&ifr, 0, sizeof(ifr));
@@ -676,12 +684,6 @@ union Channel *setup_channel(struct MessageOpenChannel *ope)
                 bufferevent_enable( channel->tcp.peer_buffers,
                                     EV_READ | EV_WRITE);
 
-                bufferevent_socket_connect_hostname(channel->tcp.peer_buffers,
-                                                    context.dns,
-                                                    AF_UNSPEC,
-                                                    options.host,
-                                                    ntohs(ope->port));
-
                 channel->tcp.channel_buffers = bufferevent_socket_new(
                     context.events,
                     -1,
@@ -694,12 +696,22 @@ union Channel *setup_channel(struct MessageOpenChannel *ope)
                     return NULL;
                 }
 
+                bufferevent_socket_connect_hostname(
+                    channel->tcp.channel_buffers,
+                    context.dns,
+                    AF_UNSPEC,
+                    options.relay_host,
+                    options.control_port);
+
                 evutil_socket_t cfd =
                     bufferevent_getfd(channel->tcp.channel_buffers);
 
                 if(options.input_interface)
                 {
-                    debug("binding to interface %s", options.input_interface);
+                    debug(  "binding fd:%d to interface %s",
+                            cfd,
+                            options.input_interface);
+
                     struct ifreq ifr; memset(&ifr, 0, sizeof(ifr));
                     strncpy(ifr.ifr_name,
                             options.input_interface,
@@ -736,13 +748,6 @@ union Channel *setup_channel(struct MessageOpenChannel *ope)
 
                 bufferevent_enable( channel->tcp.channel_buffers,
                                     EV_READ | EV_WRITE);
-
-                bufferevent_socket_connect_hostname(
-                    channel->tcp.channel_buffers,
-                    context.dns,
-                    AF_UNSPEC,
-                    options.relay_host,
-                    options.control_port);
 
                 bufferevent_write(  channel->tcp.channel_buffers,
                                     &res,
@@ -790,7 +795,8 @@ union Channel *setup_channel(struct MessageOpenChannel *ope)
                 //make nonblocking?
                 if(options.output_interface)
                 {
-                    debug(  "channel: binding to interface %s",
+                    debug(  "channel: binding fd:%d to interface %s",
+                            channel->udp.peer_fd,
                             options.output_interface);
 
                     struct ifreq ifr; memset(&ifr, 0, sizeof(ifr));
@@ -855,7 +861,8 @@ union Channel *setup_channel(struct MessageOpenChannel *ope)
                 //make nonblocking?
                 if(options.input_interface)
                 {
-                    debug(  "channel: binding to interface %s",
+                    debug(  "channel: binding fd:%d to interface %s",
+                            channel->udp.channel_fd,
                             options.input_interface);
 
                     struct ifreq ifr; memset(&ifr, 0, sizeof(ifr));
