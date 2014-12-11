@@ -23,7 +23,6 @@
 // libevent
 #include <event2/buffer.h>
 #include <event2/bufferevent.h>
-#include <event2/dns.h>
 #include <event2/event.h>
 #include <event2/util.h>
 
@@ -77,7 +76,6 @@ struct Options
 struct Context
 {
     struct event_base       *events;
-    struct evdns_base       *dns;
     struct bufferevent      *control_buffers;
 
     struct AuthenticationHash   challenge;
@@ -190,7 +188,6 @@ int32_t main(int32_t argc, char **argv)
         return 2;
     }
 
-    context.dns = evdns_base_new(context.events, 1);
     context.control_buffers = bufferevent_socket_new(   context.events,
                                                         -1,
                                                         BEV_OPT_CLOSE_ON_FREE);
@@ -202,7 +199,7 @@ int32_t main(int32_t argc, char **argv)
     }
 
     bufferevent_socket_connect_hostname(context.control_buffers,
-                                        context.dns,
+                                        NULL,
                                         AF_INET,
                                         options.relay_host,
                                         options.control_port);
@@ -633,7 +630,7 @@ union Channel *setup_channel(struct MessageOpenChannel *ope)
                 }
 
                 bufferevent_socket_connect_hostname(channel->tcp.peer_buffers,
-                                                    context.dns,
+                                                    NULL,
                                                     AF_UNSPEC,
                                                     options.host,
                                                     ntohs(ope->port));
@@ -698,7 +695,7 @@ union Channel *setup_channel(struct MessageOpenChannel *ope)
 
                 bufferevent_socket_connect_hostname(
                     channel->tcp.channel_buffers,
-                    context.dns,
+                    NULL,
                     AF_UNSPEC,
                     options.relay_host,
                     options.control_port);
