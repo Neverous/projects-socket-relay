@@ -192,9 +192,7 @@ int32_t main(int32_t argc, char **argv)
 
     context.dns = evdns_base_new(context.events, 1);
     context.control_buffers = bufferevent_socket_new(   context.events,
-                                                        socket( AF_INET,
-                                                                IPPROTO_TCP,
-                                                                0),
+                                                        -1,
                                                         BEV_OPT_CLOSE_ON_FREE);
 
     if(!context.control_buffers)
@@ -205,12 +203,12 @@ int32_t main(int32_t argc, char **argv)
 
     bufferevent_socket_connect_hostname(context.control_buffers,
                                         context.dns,
-                                        AF_UNSPEC,
+                                        AF_INET,
                                         options.relay_host,
                                         options.control_port);
 
-
     evutil_socket_t fd = bufferevent_getfd(context.control_buffers);
+    assert(fd != -1);
     if(options.input_interface)
     {
         debug("binding fd:%d to interface %s", fd, options.input_interface);
@@ -230,6 +228,7 @@ int32_t main(int32_t argc, char **argv)
                 &one,
                 sizeof(one));
 
+    assert(bufferevent_getfd(context.control_buffers) != -1);
     bufferevent_setwatermark(   context.control_buffers,
                                 EV_READ | EV_WRITE,
                                 sizeof(struct Message),
@@ -623,7 +622,7 @@ union Channel *setup_channel(struct MessageOpenChannel *ope)
                 debug("channel: setting up tcp");
                 channel->tcp.peer_buffers = bufferevent_socket_new(
                     context.events,
-                    socket(AF_INET, IPPROTO_TCP, 0),
+                    -1,
                     BEV_OPT_CLOSE_ON_FREE);
 
                 if(!channel->tcp.peer_buffers)
@@ -639,9 +638,8 @@ union Channel *setup_channel(struct MessageOpenChannel *ope)
                                                     options.host,
                                                     ntohs(ope->port));
 
-                evutil_socket_t pfd =
-                    bufferevent_getfd(channel->tcp.peer_buffers);
-
+                evutil_socket_t pfd = bufferevent_getfd(channel->tcp.peer_buffers);
+                assert(pfd != -1);
                 if(options.output_interface)
                 {
                     debug(  "channel: binding fd:%d to interface %s",
@@ -688,7 +686,7 @@ union Channel *setup_channel(struct MessageOpenChannel *ope)
 
                 channel->tcp.channel_buffers = bufferevent_socket_new(
                     context.events,
-                    socket(AF_INET, IPPROTO_TCP, 0),
+                    -1,
                     BEV_OPT_CLOSE_ON_FREE);
 
                 if(!channel->tcp.channel_buffers)
@@ -705,9 +703,8 @@ union Channel *setup_channel(struct MessageOpenChannel *ope)
                     options.relay_host,
                     options.control_port);
 
-                evutil_socket_t cfd =
-                    bufferevent_getfd(channel->tcp.channel_buffers);
-
+                evutil_socket_t cfd = bufferevent_getfd(channel->tcp.channel_buffers);
+                assert(cfd != -1);
                 if(options.input_interface)
                 {
                     debug(  "binding fd:%d to interface %s",
@@ -794,6 +791,8 @@ union Channel *setup_channel(struct MessageOpenChannel *ope)
                 channel->udp.peer_fd = socket(  answer->ai_family,
                                                 answer->ai_socktype,
                                                 answer->ai_protocol);
+
+                assert(channel->udp.peer_fd != -1);
                 //make nonblocking?
                 if(options.output_interface)
                 {
@@ -860,6 +859,8 @@ union Channel *setup_channel(struct MessageOpenChannel *ope)
                 channel->udp.channel_fd = socket(   answer->ai_family,
                                                     answer->ai_socktype,
                                                     answer->ai_protocol);
+
+                assert(channel->udp.channel_fd != -1);
                 //make nonblocking?
                 if(options.input_interface)
                 {

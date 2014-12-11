@@ -234,9 +234,16 @@ int32_t main(int32_t argc, char **argv)
         LEV_OPT_CLOSE_ON_FREE | LEV_OPT_REUSEABLE, -1,
         (struct sockaddr *) &relay, sizeof(relay));
 
+    if(!context.listener.tcp)
+    {
+        perror("evconnlistener_new_bind");
+        return 4;
+    }
+
     if(options.interface)
     {
         evutil_socket_t fd = evconnlistener_get_fd(context.listener.tcp);
+        assert(fd != -1);
         debug("binding fd:%d to interface %s", fd, options.interface);
         struct ifreq ifr; memset(&ifr, 0, sizeof(ifr));
         strncpy(ifr.ifr_name, options.interface, sizeof(ifr.ifr_name));
@@ -245,12 +252,6 @@ int32_t main(int32_t argc, char **argv)
             perror("setsockopt");
             return 3;
         }
-    }
-
-    if(!context.listener.tcp)
-    {
-        perror("evconnlistener_new_bind");
-        return 4;
     }
 
     evconnlistener_set_error_cb(    context.listener.tcp,
@@ -751,6 +752,13 @@ void setup_relay_connections(void)
                 LEV_OPT_CLOSE_ON_FREE | LEV_OPT_REUSEABLE, -1,
                 (struct sockaddr *) &relay, sizeof(relay));
 
+            if(!cur->tcp_listener)
+            {
+                perror("evconnlistener_new_bind");
+                teardown_control_connection();
+                return;
+            }
+
             if(options.interface)
             {
                 evutil_socket_t fd =
@@ -760,6 +768,7 @@ void setup_relay_connections(void)
                         fd,
                         options.interface);
 
+                assert(fd != -1);
                 struct ifreq ifr; memset(&ifr, 0, sizeof(ifr));
                 strncpy(ifr.ifr_name, options.interface, sizeof(ifr.ifr_name));
                 if(setsockopt(  fd,
@@ -772,13 +781,6 @@ void setup_relay_connections(void)
                     teardown_control_connection();
                     return;
                 }
-            }
-
-            if(!cur->tcp_listener)
-            {
-                perror("evconnlistener_new_bind");
-                teardown_control_connection();
-                return;
             }
 
             evconnlistener_set_error_cb(cur->tcp_listener,
@@ -801,6 +803,7 @@ void setup_relay_connections(void)
             relay.sin_port          = htons(port_from);
 
             evutil_socket_t ufd = socket(AF_INET, SOCK_DGRAM, 0);
+            assert(ufd != -1);
             //evutil_make_socket_nonblocking(ufd); maybe?
             if(options.interface)
             {
@@ -858,7 +861,7 @@ void setup_relay_connections(void)
         relay.sin_addr.s_addr   = INADDR_ANY;
         relay.sin_port          = htons(options.control_port);
 
-        int32_t ufd = socket(AF_INET, SOCK_DGRAM, 0);
+        evutil_socket_t ufd = socket(AF_INET, SOCK_DGRAM, 0);
         //evutil_make_socket_nonblocking(ufd); maybe?
         if(options.interface)
         {
