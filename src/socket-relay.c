@@ -696,17 +696,16 @@ inline
 static
 void setup_relay_connections(void)
 {
-    const char *w = options.relay_ports;
-    for(context.relays_count = 1;
-        w[context.relays_count];
-        w[context.relays_count] == ',' ? ++ context.relays_count : *w ++);
-
-    if(!context.relays_count)
+    if(!*options.relay_ports)
     {
         debug("relay connections: missing ports");
         teardown_control_connection();
         return;
     }
+
+    const char *w = options.relay_ports;
+    for(context.relays_count = 1; *w; ++ w)
+        context.relays_count += *w == ',';
 
     debug("relay connections: setting up tcp channels port");
     evconnlistener_set_cb(  context.listener.tcp,
@@ -731,6 +730,7 @@ void setup_relay_connections(void)
             != 3)
         {
             debug("relay connections: invalid relay ports format");
+            context.relays_count = c;
             teardown_control_connection();
             return;
         }
@@ -755,6 +755,7 @@ void setup_relay_connections(void)
             if(!cur->tcp_listener)
             {
                 perror("evconnlistener_new_bind");
+                context.relays_count = c;
                 teardown_control_connection();
                 return;
             }
@@ -778,6 +779,7 @@ void setup_relay_connections(void)
                                 sizeof(ifr)) == -1)
                 {
                     perror("setsockopt");
+                    context.relays_count = c;
                     teardown_control_connection();
                     return;
                 }
@@ -820,6 +822,7 @@ void setup_relay_connections(void)
                                 sizeof(ifr)) == -1)
                 {
                     perror("setsockopt");
+                    context.relays_count = c;
                     teardown_control_connection();
                     return;
                 }
@@ -828,6 +831,7 @@ void setup_relay_connections(void)
             if(bind(ufd, (struct sockaddr *) &relay, sizeof(relay)) == -1)
             {
                 perror("bind");
+                context.relays_count = c;
                 teardown_control_connection();
                 return;
             }
@@ -847,6 +851,7 @@ void setup_relay_connections(void)
         else
         {
             debug("relay connections: unsupported protocol %s", proto);
+            context.relays_count = c;
             teardown_control_connection();
             return;
         }
@@ -925,7 +930,7 @@ void teardown_relay_connections(void)
                 break;
 
             default:
-                debug("Not yet implemented");
+                debug("%d protocol not yet implemented", cur->proto);
                 break;
         }
 

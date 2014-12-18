@@ -1,4 +1,6 @@
-CFLAGS=-O3 --std=gnu11 -Wall -Werror -Isrc/ -levent -DNDEBUG
+CFLAGS=-O3 --std=gnu11 -Wall -Werror -Isrc/ -DNDEBUG
+LFLAGS=-levent
+CC?=gcc
 STRIP?=strip
 
 all: socket-server socket-relay
@@ -8,12 +10,12 @@ all: socket-server socket-relay
 
 socket-server: src/socket-server.o src/protocol/sha2.o
 	mkdir -p bin
-	${CC} ${CFLAGS} -o bin/socket-server $^
+	${CC} ${CFLAGS} ${LFLAGS} -o bin/socket-server $^
 	${STRIP} bin/socket-server
 
 socket-relay: src/socket-relay.o src/protocol/sha2.o
 	mkdir -p bin
-	${CC} ${CFLAGS} -o bin/socket-relay $^
+	${CC} ${CFLAGS} ${LFLAGS} -o bin/socket-relay $^
 	${STRIP} bin/socket-relay
 
 install: all
