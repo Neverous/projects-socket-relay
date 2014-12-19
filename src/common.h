@@ -206,9 +206,6 @@ void error_on_tcp_channel(struct bufferevent *bev, short events, void *chan)
 
                 bufferevent_disable(bev_peer, EV_READ);
             }
-
-            else
-                teardown_channel((union Channel *) chan, 1);
         }
     }
 }
