@@ -804,7 +804,7 @@ union Channel *setup_channel(struct MessageOpenChannel *ope)
                     options.relay_host,
                     options.control_port);
 
-                assert(cfd != bufferevent_getfd(channel->tcp.channel_buffers));
+                assert(cfd == bufferevent_getfd(channel->tcp.channel_buffers));
                 bufferevent_setwatermark(   channel->tcp.channel_buffers,
                                             EV_READ | EV_WRITE,
                                             sizeof(struct Message),
