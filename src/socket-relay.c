@@ -244,7 +244,7 @@ int32_t main(int32_t argc, char **argv)
     {
         evutil_socket_t fd = evconnlistener_get_fd(context.listener.tcp);
         assert(fd != -1);
-        debug("binding fd:%d to interface %s", fd, options.interface);
+        debug("main: binding fd:%d to interface %s", fd, options.interface);
         struct ifreq ifr; memset(&ifr, 0, sizeof(ifr));
         strncpy(ifr.ifr_name, options.interface, sizeof(ifr.ifr_name));
         if(setsockopt(fd, SOL_SOCKET, SO_BINDTODEVICE, &ifr, sizeof(ifr)) == -1)

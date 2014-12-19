@@ -208,7 +208,7 @@ int32_t main(int32_t argc, char **argv)
     assert(fd != -1);
     if(options.input_interface)
     {
-        debug("binding fd:%d to interface %s", fd, options.input_interface);
+        debug("main: binding fd:%d to interface %s", fd, options.input_interface);
         struct ifreq ifr; memset(&ifr, 0, sizeof(ifr));
         strncpy(ifr.ifr_name, options.input_interface, sizeof(ifr.ifr_name));
         if(setsockopt(fd, SOL_SOCKET, SO_BINDTODEVICE, &ifr, sizeof(ifr)) == -1)
@@ -704,7 +704,7 @@ union Channel *setup_channel(struct MessageOpenChannel *ope)
                 assert(cfd != -1);
                 if(options.input_interface)
                 {
-                    debug(  "binding fd:%d to interface %s",
+                    debug(  "channel: binding fd:%d to interface %s",
                             cfd,
                             options.input_interface);
 
