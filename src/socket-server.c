@@ -216,6 +216,8 @@ int32_t main(int32_t argc, char **argv)
 
     evutil_socket_t fd = socket(AF_INET, SOCK_STREAM, 0);
     assert(fd != -1);
+    evutil_make_socket_nonblocking(fd);
+    evutil_make_listen_socket_reuseable(fd);
     if(options.input_address)
     {
         debug("main: binding fd:%d to address %s", fd, options.input_address);
@@ -663,6 +665,7 @@ union Channel *setup_channel(struct MessageOpenChannel *ope)
                 debug("channel: setting up tcp");
                 evutil_socket_t pfd = socket(AF_INET, SOCK_STREAM, 0);
                 assert(pfd != -1);
+                evutil_make_socket_nonblocking(pfd);
                 if(options.output_address)
                 {
                     debug(  "channel: binding fd:%d to address %s",
@@ -711,7 +714,6 @@ union Channel *setup_channel(struct MessageOpenChannel *ope)
                             &one,
                             sizeof(one));
 
-
                 channel->tcp.peer_buffers = bufferevent_socket_new(
                     context.events,
                     pfd,
@@ -747,10 +749,11 @@ union Channel *setup_channel(struct MessageOpenChannel *ope)
 
                 evutil_socket_t cfd = socket(AF_INET, SOCK_STREAM, 0);
                 assert(cfd != -1);
+                evutil_make_socket_nonblocking(cfd);
                 if(options.input_address)
                 {
                     debug(  "channel: binding fd:%d to address %s",
-                            pfd,
+                            cfd,
                             options.input_address);
 
                     struct sockaddr_in addr; memset(&addr, 0, sizeof(addr));
@@ -873,6 +876,7 @@ union Channel *setup_channel(struct MessageOpenChannel *ope)
                                                 answer->ai_protocol);
 
                 assert(channel->udp.peer_fd != -1);
+                //make nonblocking?
                 if(options.output_address)
                 {
                     debug(  "channel: binding fd:%d to address %s",
@@ -893,7 +897,6 @@ union Channel *setup_channel(struct MessageOpenChannel *ope)
                     }
                 }
 
-                //make nonblocking?
                 if(options.output_interface)
                 {
                     debug(  "channel: binding fd:%d to interface %s",
@@ -961,6 +964,7 @@ union Channel *setup_channel(struct MessageOpenChannel *ope)
                                                     answer->ai_protocol);
 
                 assert(channel->udp.channel_fd != -1);
+                //make nonblocking?
                 if(options.input_address)
                 {
                     debug(  "channel: binding fd:%d to address %s",
@@ -981,7 +985,6 @@ union Channel *setup_channel(struct MessageOpenChannel *ope)
                     }
                 }
 
-                //make nonblocking?
                 if(options.input_interface)
                 {
                     debug(  "channel: binding fd:%d to interface %s",
