@@ -39,17 +39,19 @@
 const char *HELP    = "Usage: socket-relay [options]\n\n\
     -h --help                                               Display this usage information.\n\
     -v --version                                            Display version.\n\
-    -i --interface      INTERFACE                           Network interface to use.\n\
+    -i --interface      INTERFACE[=any]                     Network interface to use.\n\
+    -a --address        ADDRESS[=any]                       IP Address to use.\n\
     -c --control-port   PORT[=10000]                        Control port.\n\
     -r --relay-ports    PORTS[=tcp:10080:80,tcp:10022:22]   Relay ports.\n\
     -p --password       PASSWORD[=1234]                     Password.";
 
-const char *SHORT_OPTIONS           = "hvi:c:r:p:";
+const char *SHORT_OPTIONS           = "hvi:a:c:r:p:";
 const struct option LONG_OPTIONS[] =
 {
     {"help",            no_argument,        NULL,   'h'}, // display help and usage
     {"version",         no_argument,        NULL,   'v'}, // display version
     {"interface",       required_argument,  NULL,   'i'}, // interface
+    {"address",         required_argument,  NULL,   'a'}, // address
     {"control-port",    required_argument,  NULL,   'c'}, // control port
     {"relay-ports",     required_argument,  NULL,   'r'}, // relay ports
     {"password",        required_argument,  NULL,   'p'}, // password
@@ -62,10 +64,12 @@ struct Options
     const char  *relay_ports;
     const char  *password;
     const char  *interface;
+    const char  *address;
 } options = {
     10000,
     "tcp:10080:80,tcp:10022:22",
     "1234",
+    NULL,
     NULL,
 };
 
@@ -203,6 +207,9 @@ int32_t main(int32_t argc, char **argv)
             case 'i': options.interface = optarg;
                 break;
 
+            case 'a': options.address = optarg;
+                break;
+
             case 'c': options.control_port = atoi(optarg);
                 break;
 
@@ -225,7 +232,15 @@ int32_t main(int32_t argc, char **argv)
 
     struct sockaddr_in  relay; memset(&relay, 0, sizeof(relay));
     relay.sin_family        = AF_INET;
-    relay.sin_addr.s_addr   = INADDR_ANY;
+    if(options.address)
+    {
+        debug("binding to address %s", options.address);
+        inet_pton(AF_INET, options.address, &relay.sin_addr);
+    }
+
+    else
+        relay.sin_addr.s_addr   = INADDR_ANY;
+
     relay.sin_port          = htons(options.control_port);
 
     context.listener.tcp = evconnlistener_new_bind(
@@ -743,7 +758,15 @@ void setup_relay_connections(void)
             cur->proto = IPPROTO_TCP;
             struct sockaddr_in  relay; memset(&relay, 0, sizeof(relay));
             relay.sin_family        = AF_INET;
-            relay.sin_addr.s_addr   = INADDR_ANY;
+            if(options.address)
+            {
+                debug("relay connections: binding to address %s", options.address);
+                inet_pton(AF_INET, options.address, &relay.sin_addr);
+            }
+
+            else
+                relay.sin_addr.s_addr   = INADDR_ANY;
+
             relay.sin_port          = htons(port_from);
 
             cur->tcp_listener = evconnlistener_new_bind(
@@ -801,7 +824,15 @@ void setup_relay_connections(void)
             cur->proto = IPPROTO_UDP;
             struct sockaddr_in  relay; memset(&relay, 0, sizeof(relay));
             relay.sin_family        = AF_INET;
-            relay.sin_addr.s_addr   = INADDR_ANY;
+            if(options.address)
+            {
+                debug("relay connections: binding to address %s", options.address);
+                inet_pton(AF_INET, options.address, &relay.sin_addr);
+            }
+
+            else
+                relay.sin_addr.s_addr   = INADDR_ANY;
+
             relay.sin_port          = htons(port_from);
 
             evutil_socket_t ufd = socket(AF_INET, SOCK_DGRAM, 0);
@@ -863,7 +894,15 @@ void setup_relay_connections(void)
         struct sockaddr_in  relay; memset(&relay, 0, sizeof(relay));
 
         relay.sin_family        = AF_INET;
-        relay.sin_addr.s_addr   = INADDR_ANY;
+        if(options.address)
+        {
+            debug("relay connections: binding to address %s", options.address);
+            inet_pton(AF_INET, options.address, &relay.sin_addr);
+        }
+
+        else
+            relay.sin_addr.s_addr   = INADDR_ANY;
+
         relay.sin_port          = htons(options.control_port);
 
         evutil_socket_t ufd = socket(AF_INET, SOCK_DGRAM, 0);
