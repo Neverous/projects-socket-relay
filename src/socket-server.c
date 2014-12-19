@@ -255,9 +255,10 @@ int32_t main(int32_t argc, char **argv)
                 sizeof(one));
 
 
-    context.control_buffers = bufferevent_socket_new(   context.events,
-                                                        fd,
-                                                        BEV_OPT_CLOSE_ON_FREE);
+    context.control_buffers = bufferevent_socket_new(
+        context.events,
+        fd,
+        BEV_OPT_CLOSE_ON_FREE | BEV_OPT_DEFER_CALLBACKS);
 
     if(!context.control_buffers)
     {
@@ -717,7 +718,7 @@ union Channel *setup_channel(struct MessageOpenChannel *ope)
                 channel->tcp.peer_buffers = bufferevent_socket_new(
                     context.events,
                     pfd,
-                    BEV_OPT_CLOSE_ON_FREE);
+                    BEV_OPT_CLOSE_ON_FREE | BEV_OPT_DEFER_CALLBACKS);
 
                 if(!channel->tcp.peer_buffers)
                 {
@@ -800,7 +801,7 @@ union Channel *setup_channel(struct MessageOpenChannel *ope)
                 channel->tcp.channel_buffers = bufferevent_socket_new(
                     context.events,
                     cfd,
-                    BEV_OPT_CLOSE_ON_FREE);
+                    BEV_OPT_CLOSE_ON_FREE | BEV_OPT_DEFER_CALLBACKS);
 
                 if(!channel->tcp.channel_buffers)
                 {

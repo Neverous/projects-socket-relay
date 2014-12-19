@@ -344,7 +344,7 @@ void accept_control_connection( struct evconnlistener *listener,
     context.control_buffers = bufferevent_socket_new(
         context.events,
         fd,
-        BEV_OPT_CLOSE_ON_FREE);
+        BEV_OPT_CLOSE_ON_FREE | BEV_OPT_DEFER_CALLBACKS);
 
     if(!context.control_buffers)
     {
@@ -572,7 +572,7 @@ void accept_tcp_channel_connection( struct evconnlistener *listener,
     struct bufferevent *buffevent = bufferevent_socket_new(
         context.events,
         fd,
-        BEV_OPT_CLOSE_ON_FREE);
+        BEV_OPT_CLOSE_ON_FREE | BEV_OPT_DEFER_CALLBACKS);
 
     if(!buffevent)
     {
@@ -1010,7 +1010,7 @@ void accept_tcp_peer_connection(struct evconnlistener *listener,
     struct bufferevent *buffevent = bufferevent_socket_new(
         context.events,
         fd,
-        BEV_OPT_CLOSE_ON_FREE);
+        BEV_OPT_CLOSE_ON_FREE | BEV_OPT_DEFER_CALLBACKS);
 
     if(!buffevent)
     {
