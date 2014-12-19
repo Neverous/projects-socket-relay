@@ -295,14 +295,13 @@ int32_t main(int32_t argc, char **argv)
 
     event_add(stats, &thirty_seconds);
 
-    struct timeval ten_seconds = { 10, 0 };
     struct event *cleanup = event_new(  context.events,
                                         -1,
                                         EV_TIMEOUT | EV_PERSIST,
                                         cleanup_channels,
                                         NULL);
 
-    event_add(cleanup, &ten_seconds);
+    event_add(cleanup, &thirty_seconds);
 
     debug("main: connecting");
     event_base_dispatch(context.events);
