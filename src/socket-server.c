@@ -6,11 +6,13 @@
  *  Server node.
  */
 
+#include <arpa/inet.h>
 #include <assert.h>
 #include <errno.h>
 #include <getopt.h>
 #include <netinet/tcp.h>
 #include <net/if.h>
+
 #include <stdarg.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -35,20 +37,24 @@
 const char *HELP    = "Usage: socket-server [options]\n\n\
     -h --help                                   Display this usage information.\n\
     -v --version                                Display program version.\n\
-    -i --input-interface    INTERFACE           Input interface to bind to.\n\
-    -o --output-interface   INTERFACE           Output interface to bind to.\n\
+    -i --input-interface    INTERFACE[=any]     Input interface to bind to.\n\
+    -a --input-address      ADDRESS[=any]       Input address to bind to.\n\
+    -o --output-interface   INTERFACE[=any]     Output interface to bind to.\n\
+    -b --output-address     ADDRESS[=any]       Output address to bind to.\n\
     -r --relay-host         HOST[=localhost]    Address of the relay.\n\
     -s --host               HOST[=localhost]    Destination address.\n\
     -c --control-port       PORT[=10000]        Control port of the relay.\n\
     -p --password           PASSWORD[=1234]     Password.";
 
-const char *SHORT_OPTIONS           = "hvi:o:r:s:c:p:";
+const char *SHORT_OPTIONS           = "hvi:a:o:b:r:s:c:p:";
 const struct option LONG_OPTIONS[] =
 {
     {"help",                no_argument,        NULL,   'h'}, // display help and usage
     {"version",             no_argument,        NULL,   'v'}, // display version
     {"input-interface",     required_argument,  NULL,   'i'}, // input interface to bind to
+    {"input-address",       required_argument,  NULL,   'a'}, // input address to bind to
     {"output-interface",    required_argument,  NULL,   'o'}, // output interface to bind to
+    {"output-address",      required_argument,  NULL,   'b'}, // output address to bind to
     {"relay-host",          required_argument,  NULL,   'r'}, // relay address
     {"host",                required_argument,  NULL,   's'}, // destination address
     {"control-port",        required_argument,  NULL,   'c'}, // relay control port
@@ -63,12 +69,16 @@ struct Options
     const char  *host;
     const char  *password;
     const char  *input_interface;
+    const char  *input_address;
     const char  *output_interface;
+    const char  *output_address;
 } options = {
     10000,
     "localhost",
     "localhost",
     "1234",
+    NULL,
+    NULL,
     NULL,
     NULL,
 };
@@ -162,7 +172,13 @@ int32_t main(int32_t argc, char **argv)
             case 'i': options.input_interface = optarg;
                 break;
 
+            case 'a': options.input_address = optarg;
+                break;
+
             case 'o': options.output_interface = optarg;
+                break;
+
+            case 'b': options.output_address = optarg;
                 break;
 
             case 'r': options.relay_host = optarg;
@@ -198,6 +214,7 @@ int32_t main(int32_t argc, char **argv)
         return 3;
     }
 
+    debug("TODO how to bind here to ip?");
     bufferevent_socket_connect_hostname(context.control_buffers,
                                         NULL,
                                         AF_INET,
@@ -629,9 +646,10 @@ union Channel *setup_channel(struct MessageOpenChannel *ope)
                     return NULL;
                 }
 
+                debug("channel: TODO how to bind here to ip?");
                 bufferevent_socket_connect_hostname(channel->tcp.peer_buffers,
                                                     NULL,
-                                                    AF_UNSPEC,
+                                                    AF_INET,
                                                     options.host,
                                                     ntohs(ope->port));
 
@@ -693,10 +711,11 @@ union Channel *setup_channel(struct MessageOpenChannel *ope)
                     return NULL;
                 }
 
+                debug("channel: TODO how to bind here to ip?");
                 bufferevent_socket_connect_hostname(
                     channel->tcp.channel_buffers,
                     NULL,
-                    AF_UNSPEC,
+                    AF_INET,
                     options.relay_host,
                     options.control_port);
 
@@ -790,6 +809,26 @@ union Channel *setup_channel(struct MessageOpenChannel *ope)
                                                 answer->ai_protocol);
 
                 assert(channel->udp.peer_fd != -1);
+                if(options.output_address)
+                {
+                    debug(  "channel: binding fd:%d to address %s",
+                            channel->udp.peer_fd,
+                            options.output_address);
+
+                    struct sockaddr_in addr; memset(&addr, 0, sizeof(addr));
+                    addr.sin_family = AF_INET;
+                    addr.sin_port = 0;
+                    inet_pton(AF_INET, options.output_address, &addr.sin_addr);
+                    if(bind(channel->udp.peer_fd,
+                            (struct sockaddr *) &addr,
+                            sizeof(addr)) == -1)
+                    {
+                        perror("bind");
+                        teardown_channel(channel, 1);
+                        return NULL;
+                    }
+                }
+
                 //make nonblocking?
                 if(options.output_interface)
                 {
@@ -858,6 +897,26 @@ union Channel *setup_channel(struct MessageOpenChannel *ope)
                                                     answer->ai_protocol);
 
                 assert(channel->udp.channel_fd != -1);
+                if(options.input_address)
+                {
+                    debug(  "channel: binding fd:%d to address %s",
+                            channel->udp.channel_fd,
+                            options.input_address);
+
+                    struct sockaddr_in addr; memset(&addr, 0, sizeof(addr));
+                    addr.sin_family = AF_INET;
+                    addr.sin_port = 0;
+                    inet_pton(AF_INET, options.input_address, &addr.sin_addr);
+                    if(bind(channel->udp.channel_fd,
+                            (struct sockaddr *) &addr,
+                            sizeof(addr)) == -1)
+                    {
+                        perror("bind");
+                        teardown_channel(channel, 1);
+                        return NULL;
+                    }
+                }
+
                 //make nonblocking?
                 if(options.input_interface)
                 {
