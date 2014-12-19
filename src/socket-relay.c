@@ -195,7 +195,11 @@ void teardown_channel(union Channel *channel, uint8_t close_channel);
 int32_t main(int32_t argc, char **argv)
 {
     int32_t o;
-    while((o = getopt_long(argc, argv, SHORT_OPTIONS, LONG_OPTIONS, NULL)) != -1)
+    while((o = getopt_long( argc,
+                            argv,
+                            SHORT_OPTIONS,
+                            LONG_OPTIONS,
+                            NULL)) != -1)
         switch(o)
         {
             case 'h': puts(HELP);
@@ -234,7 +238,7 @@ int32_t main(int32_t argc, char **argv)
     relay.sin_family        = AF_INET;
     if(options.address)
     {
-        debug("binding to address %s", options.address);
+        debug("main: binding to address %s", options.address);
         inet_pton(AF_INET, options.address, &relay.sin_addr);
     }
 
@@ -760,7 +764,9 @@ void setup_relay_connections(void)
             relay.sin_family        = AF_INET;
             if(options.address)
             {
-                debug("relay connections: binding to address %s", options.address);
+                debug(  "relay connections: binding to address %s",
+                        options.address);
+
                 inet_pton(AF_INET, options.address, &relay.sin_addr);
             }
 
@@ -826,7 +832,9 @@ void setup_relay_connections(void)
             relay.sin_family        = AF_INET;
             if(options.address)
             {
-                debug("relay connections: binding to address %s", options.address);
+                debug(  "relay connections: binding to address %s",
+                        options.address);
+
                 inet_pton(AF_INET, options.address, &relay.sin_addr);
             }
 

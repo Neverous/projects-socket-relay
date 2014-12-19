@@ -160,7 +160,8 @@ void teardown_channel(union Channel *channel, uint8_t close_channel);
 int32_t main(int32_t argc, char **argv)
 {
     int32_t o;
-    while((o = getopt_long(argc, argv, SHORT_OPTIONS, LONG_OPTIONS, NULL)) != -1)
+    while(
+        (o = getopt_long(argc, argv, SHORT_OPTIONS, LONG_OPTIONS, NULL)) != -1)
         switch(o)
         {
             case 'h': puts(HELP);
@@ -214,7 +215,6 @@ int32_t main(int32_t argc, char **argv)
         return 3;
     }
 
-    debug("TODO how to bind here to ip?");
     bufferevent_socket_connect_hostname(context.control_buffers,
                                         NULL,
                                         AF_INET,
@@ -223,15 +223,32 @@ int32_t main(int32_t argc, char **argv)
 
     evutil_socket_t fd = bufferevent_getfd(context.control_buffers);
     assert(fd != -1);
+    if(options.input_address)
+    {
+        debug("main: binding fd:%d to address %s", fd, options.input_address);
+        struct sockaddr_in addr; memset(&addr, 0, sizeof(addr));
+        addr.sin_family = AF_INET;
+        addr.sin_port = 0;
+        inet_pton(AF_INET, options.input_address, &addr.sin_addr);
+        if(bind(fd, (struct sockaddr *) &addr, sizeof(addr)) == -1)
+        {
+            perror("bind");
+            return 4;
+        }
+    }
+
     if(options.input_interface)
     {
-        debug("main: binding fd:%d to interface %s", fd, options.input_interface);
+        debug(  "main: binding fd:%d to interface %s",
+                fd,
+                options.input_interface);
+
         struct ifreq ifr; memset(&ifr, 0, sizeof(ifr));
         strncpy(ifr.ifr_name, options.input_interface, sizeof(ifr.ifr_name));
         if(setsockopt(fd, SOL_SOCKET, SO_BINDTODEVICE, &ifr, sizeof(ifr)) == -1)
         {
             perror("setsockopt");
-            return 4;
+            return 5;
         }
     }
 
@@ -653,7 +670,9 @@ union Channel *setup_channel(struct MessageOpenChannel *ope)
                                                     options.host,
                                                     ntohs(ope->port));
 
-                evutil_socket_t pfd = bufferevent_getfd(channel->tcp.peer_buffers);
+                evutil_socket_t pfd =
+                    bufferevent_getfd(channel->tcp.peer_buffers);
+
                 assert(pfd != -1);
                 if(options.output_interface)
                 {
@@ -719,8 +738,28 @@ union Channel *setup_channel(struct MessageOpenChannel *ope)
                     options.relay_host,
                     options.control_port);
 
-                evutil_socket_t cfd = bufferevent_getfd(channel->tcp.channel_buffers);
+                evutil_socket_t cfd =
+                    bufferevent_getfd(channel->tcp.channel_buffers);
+
                 assert(cfd != -1);
+                if(options.input_address)
+                {
+                    debug(  "channel: binding fd:%d to address %s",
+                            cfd,
+                            options.input_address);
+
+                    struct sockaddr_in addr; memset(&addr, 0, sizeof(addr));
+                    addr.sin_family = AF_INET;
+                    addr.sin_port = 0;
+                    inet_pton(AF_INET, options.input_address, &addr.sin_addr);
+                    if(bind(cfd, (struct sockaddr *) &addr, sizeof(addr)) == -1)
+                    {
+                        perror("bind");
+                        teardown_channel(channel, 1);
+                        return NULL;
+                    }
+                }
+
                 if(options.input_interface)
                 {
                     debug(  "channel: binding fd:%d to interface %s",
