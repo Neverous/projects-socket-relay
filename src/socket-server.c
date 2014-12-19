@@ -205,23 +205,7 @@ int32_t main(int32_t argc, char **argv)
         return 2;
     }
 
-    context.control_buffers = bufferevent_socket_new(   context.events,
-                                                        -1,
-                                                        BEV_OPT_CLOSE_ON_FREE);
-
-    if(!context.control_buffers)
-    {
-        perror("bufferevent_socket_new");
-        return 3;
-    }
-
-    bufferevent_socket_connect_hostname(context.control_buffers,
-                                        NULL,
-                                        AF_INET,
-                                        options.relay_host,
-                                        options.control_port);
-
-    evutil_socket_t fd = bufferevent_getfd(context.control_buffers);
+    evutil_socket_t fd = socket(AF_INET, IPPROTO_TCP, 0);
     assert(fd != -1);
     if(options.input_address)
     {
@@ -259,7 +243,24 @@ int32_t main(int32_t argc, char **argv)
                 &one,
                 sizeof(one));
 
-    assert(bufferevent_getfd(context.control_buffers) != -1);
+
+    context.control_buffers = bufferevent_socket_new(   context.events,
+                                                        fd,
+                                                        BEV_OPT_CLOSE_ON_FREE);
+
+    if(!context.control_buffers)
+    {
+        perror("bufferevent_socket_new");
+        return 3;
+    }
+
+    bufferevent_socket_connect_hostname(context.control_buffers,
+                                        NULL,
+                                        AF_INET,
+                                        options.relay_host,
+                                        options.control_port);
+
+    assert(fd == bufferevent_getfd(context.control_buffers));
     bufferevent_setwatermark(   context.control_buffers,
                                 EV_READ | EV_WRITE,
                                 sizeof(struct Message),
@@ -651,29 +652,26 @@ union Channel *setup_channel(struct MessageOpenChannel *ope)
         case IPPROTO_TCP:
             {
                 debug("channel: setting up tcp");
-                channel->tcp.peer_buffers = bufferevent_socket_new(
-                    context.events,
-                    -1,
-                    BEV_OPT_CLOSE_ON_FREE);
-
-                if(!channel->tcp.peer_buffers)
+                evutil_socket_t pfd = socket(AF_INET, IPPROTO_TCP, 0);
+                assert(pfd != -1);
+                if(options.output_address)
                 {
-                    perror("bufferevent_socket_new");
-                    teardown_channel(channel, 1);
-                    return NULL;
+                    debug(  "channel: binding fd:%d to address %s",
+                            pfd,
+                            options.output_address);
+
+                    struct sockaddr_in addr; memset(&addr, 0, sizeof(addr));
+                    addr.sin_family = AF_INET;
+                    addr.sin_port = 0;
+                    inet_pton(AF_INET, options.output_address, &addr.sin_addr);
+                    if(bind(pfd, (struct sockaddr *) &addr, sizeof(addr)) == -1)
+                    {
+                        perror("bind");
+                        teardown_channel(channel, 1);
+                        return NULL;
+                    }
                 }
 
-                debug("channel: TODO how to bind here to ip?");
-                bufferevent_socket_connect_hostname(channel->tcp.peer_buffers,
-                                                    NULL,
-                                                    AF_INET,
-                                                    options.host,
-                                                    ntohs(ope->port));
-
-                evutil_socket_t pfd =
-                    bufferevent_getfd(channel->tcp.peer_buffers);
-
-                assert(pfd != -1);
                 if(options.output_interface)
                 {
                     debug(  "channel: binding fd:%d to interface %s",
@@ -704,6 +702,26 @@ union Channel *setup_channel(struct MessageOpenChannel *ope)
                             &one,
                             sizeof(one));
 
+
+                channel->tcp.peer_buffers = bufferevent_socket_new(
+                    context.events,
+                    pfd,
+                    BEV_OPT_CLOSE_ON_FREE);
+
+                if(!channel->tcp.peer_buffers)
+                {
+                    perror("bufferevent_socket_new");
+                    teardown_channel(channel, 1);
+                    return NULL;
+                }
+
+                bufferevent_socket_connect_hostname(channel->tcp.peer_buffers,
+                                                    NULL,
+                                                    AF_INET,
+                                                    options.host,
+                                                    ntohs(ope->port));
+
+                assert(pfd == bufferevent_getfd(channel->tcp.peer_buffers));
                 bufferevent_setwatermark(   channel->tcp.peer_buffers,
                                             EV_READ | EV_WRITE,
                                             sizeof(struct Message),
@@ -718,40 +736,18 @@ union Channel *setup_channel(struct MessageOpenChannel *ope)
                 bufferevent_enable( channel->tcp.peer_buffers,
                                     EV_READ | EV_WRITE);
 
-                channel->tcp.channel_buffers = bufferevent_socket_new(
-                    context.events,
-                    -1,
-                    BEV_OPT_CLOSE_ON_FREE);
-
-                if(!channel->tcp.channel_buffers)
-                {
-                    perror("bufferevent_socket_new");
-                    teardown_channel(channel, 1);
-                    return NULL;
-                }
-
-                debug("channel: TODO how to bind here to ip?");
-                bufferevent_socket_connect_hostname(
-                    channel->tcp.channel_buffers,
-                    NULL,
-                    AF_INET,
-                    options.relay_host,
-                    options.control_port);
-
-                evutil_socket_t cfd =
-                    bufferevent_getfd(channel->tcp.channel_buffers);
-
+                evutil_socket_t cfd = socket(AF_INET, IPPROTO_TCP, 0);
                 assert(cfd != -1);
                 if(options.input_address)
                 {
                     debug(  "channel: binding fd:%d to address %s",
-                            cfd,
+                            pfd,
                             options.input_address);
 
                     struct sockaddr_in addr; memset(&addr, 0, sizeof(addr));
                     addr.sin_family = AF_INET;
                     addr.sin_port = 0;
-                    inet_pton(AF_INET, options.input_address, &addr.sin_addr);
+                    inet_pton(AF_INET, options.output_address, &addr.sin_addr);
                     if(bind(cfd, (struct sockaddr *) &addr, sizeof(addr)) == -1)
                     {
                         perror("bind");
@@ -789,6 +785,26 @@ union Channel *setup_channel(struct MessageOpenChannel *ope)
                             &one,
                             sizeof(one));
 
+                channel->tcp.channel_buffers = bufferevent_socket_new(
+                    context.events,
+                    cfd,
+                    BEV_OPT_CLOSE_ON_FREE);
+
+                if(!channel->tcp.channel_buffers)
+                {
+                    perror("bufferevent_socket_new");
+                    teardown_channel(channel, 1);
+                    return NULL;
+                }
+
+                bufferevent_socket_connect_hostname(
+                    channel->tcp.channel_buffers,
+                    NULL,
+                    AF_INET,
+                    options.relay_host,
+                    options.control_port);
+
+                assert(cfd != bufferevent_getfd(channel->tcp.channel_buffers));
                 bufferevent_setwatermark(   channel->tcp.channel_buffers,
                                             EV_READ | EV_WRITE,
                                             sizeof(struct Message),
