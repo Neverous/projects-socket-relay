@@ -205,7 +205,7 @@ int32_t main(int32_t argc, char **argv)
         return 2;
     }
 
-    evutil_socket_t fd = socket(AF_INET, IPPROTO_TCP, 0);
+    evutil_socket_t fd = socket(AF_INET, SOCK_STREAM, 0);
     assert(fd != -1);
     if(options.input_address)
     {
@@ -652,7 +652,7 @@ union Channel *setup_channel(struct MessageOpenChannel *ope)
         case IPPROTO_TCP:
             {
                 debug("channel: setting up tcp");
-                evutil_socket_t pfd = socket(AF_INET, IPPROTO_TCP, 0);
+                evutil_socket_t pfd = socket(AF_INET, SOCK_STREAM, 0);
                 assert(pfd != -1);
                 if(options.output_address)
                 {
@@ -736,7 +736,7 @@ union Channel *setup_channel(struct MessageOpenChannel *ope)
                 bufferevent_enable( channel->tcp.peer_buffers,
                                     EV_READ | EV_WRITE);
 
-                evutil_socket_t cfd = socket(AF_INET, IPPROTO_TCP, 0);
+                evutil_socket_t cfd = socket(AF_INET, SOCK_STREAM, 0);
                 assert(cfd != -1);
                 if(options.input_address)
                 {
