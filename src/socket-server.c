@@ -25,6 +25,7 @@
 // libevent
 #include <event2/buffer.h>
 #include <event2/bufferevent.h>
+#include <event2/dns.h>
 #include <event2/event.h>
 #include <event2/util.h>
 
@@ -86,6 +87,7 @@ struct Options
 struct Context
 {
     struct event_base       *events;
+    struct evdns_base       *dns;
     struct bufferevent      *control_buffers;
 
     struct AuthenticationHash   challenge;
@@ -205,6 +207,13 @@ int32_t main(int32_t argc, char **argv)
         return 2;
     }
 
+    context.dns = evdns_base_new(context.events, 1);
+    if(!context.dns)
+    {
+        perror("evdns_base_new");
+        return 3;
+    }
+
     evutil_socket_t fd = socket(AF_INET, SOCK_STREAM, 0);
     assert(fd != -1);
     if(options.input_address)
@@ -255,7 +264,7 @@ int32_t main(int32_t argc, char **argv)
     }
 
     bufferevent_socket_connect_hostname(context.control_buffers,
-                                        NULL,
+                                        context.dns,
                                         AF_INET,
                                         options.relay_host,
                                         options.control_port);
@@ -716,7 +725,7 @@ union Channel *setup_channel(struct MessageOpenChannel *ope)
                 }
 
                 bufferevent_socket_connect_hostname(channel->tcp.peer_buffers,
-                                                    NULL,
+                                                    context.dns,
                                                     AF_INET,
                                                     options.host,
                                                     ntohs(ope->port));
@@ -799,7 +808,7 @@ union Channel *setup_channel(struct MessageOpenChannel *ope)
 
                 bufferevent_socket_connect_hostname(
                     channel->tcp.channel_buffers,
-                    NULL,
+                    context.dns,
                     AF_INET,
                     options.relay_host,
                     options.control_port);
