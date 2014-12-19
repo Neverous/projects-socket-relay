@@ -103,83 +103,75 @@ struct Context
 
 // CONTROL CONNECTION
 static
-void accept_control_connection( struct evconnlistener *listener,
-                                evutil_socket_t fd,
-                                struct sockaddr *address,
-                                int socklet,
-                                void *args);
+void accept_control(struct evconnlistener *listener,
+                    evutil_socket_t fd,
+                    struct sockaddr *address,
+                    int socklen,
+                    void *_);
 
 inline
 static
-void setup_control_connection(struct bufferevent *buffevent);
+void setup_control(struct bufferevent *bev);
 
 static
-void error_on_control_connection_listener(  struct evconnlistener *listener,
-                                            void *args);
+void error_on_control_listener( struct evconnlistener *listener, void *_);
 
 static
-void authenticate_control_connection(struct bufferevent *buffevent, void *args);
-
-inline
-static
-void process_control_message(   struct bufferevent *buffevent,
-                                struct Message *msg);
+void authenticate_control(struct bufferevent *bev, void *_);
 
 inline
 static
-void teardown_control_connection(void);
+void process_control_message(struct bufferevent *bev, struct Message *msg);
+
+inline
+static
+void teardown_control(void);
 
 // CHANNEL CONNECTION
 static
-void accept_tcp_channel_connection( struct evconnlistener *listener,
-                                    evutil_socket_t fd,
-                                    struct sockaddr *address,
-                                    int socklen,
-                                    void *args);
+void accept_tcp_channel(struct evconnlistener *listener,
+                        evutil_socket_t fd,
+                        struct sockaddr *address,
+                        int socklen,
+                        void *_);
 
 static
-void authenticate_tcp_channel_connection(   struct bufferevent *buffevent,
-                                            void *args);
+void authenticate_tcp_channel(struct bufferevent *bev, void *_);
 
 static
-void read_udp_channel_connection(evutil_socket_t fd, short events, void *args);
-
-inline
-static
-void error_on_udp_channel_connection(   evutil_socket_t fd,
-                                        short events,
-                                        void *args);
-
-// RELAY CONNECTION
-inline
-static
-void setup_relay_connections(void);
+void read_udp_channel(evutil_socket_t fd, short events, void *_);
 
 inline
 static
-void teardown_relay_connections(void);
+void error_on_udp_channel(evutil_socket_t fd, short events, void *_);
+
+// PEER CONNECTION
+static
+void accept_tcp_peer(   struct evconnlistener *listener,
+                        evutil_socket_t fd,
+                        struct sockaddr *address,
+                        int socklen,
+                        void *relay_listener);
 
 static
-void accept_tcp_peer_connection(struct evconnlistener *listener,
-                                evutil_socket_t fd,
-                                struct sockaddr *address,
-                                int socklen,
-                                void *relay_listener);
+void error_on_tcp_peer_listener(struct evconnlistener *listener,
+                                void *_);
 
 static
-void error_on_tcp_peer_connection_listener( struct evconnlistener *listener,
-                                            void *args);
-
-static
-void read_udp_peer_connection(  evutil_socket_t fd,
-                                short events,
-                                void *relay);
+void read_udp_peer(evutil_socket_t fd, short events, void *relay);
 
 inline
 static
-void error_on_udp_peer_connection(  evutil_socket_t fd,
-                                    short events,
-                                    void *relay);
+void error_on_udp_peer(evutil_socket_t fd, short events, void *relay);
+
+// RELAY CONNECTIONS
+inline
+static
+void setup_relays(void);
+
+inline
+static
+void teardown_relays(void);
 
 // CHANNELS
 inline
@@ -189,6 +181,8 @@ union Channel *request_channel(uint8_t proto, uint16_t port);
 inline
 static
 void teardown_channel(union Channel *channel, uint8_t close_channel);
+
+//############################################################################//
 
 #include "common.h"
 
@@ -235,7 +229,7 @@ int32_t main(int32_t argc, char **argv)
     }
 
     struct sockaddr_in  relay; memset(&relay, 0, sizeof(relay));
-    relay.sin_family        = AF_INET;
+    relay.sin_family = AF_INET;
     if(options.address)
     {
         debug("main: binding to address %s", options.address);
@@ -243,20 +237,20 @@ int32_t main(int32_t argc, char **argv)
     }
 
     else
-        relay.sin_addr.s_addr   = INADDR_ANY;
+        relay.sin_addr.s_addr = INADDR_ANY;
 
-    relay.sin_port          = htons(options.control_port);
+    relay.sin_port = htons(options.control_port);
 
     context.listener.tcp = evconnlistener_new_bind(
         context.events,
-        accept_control_connection, NULL,
+        accept_control, NULL,
         LEV_OPT_CLOSE_ON_FREE | LEV_OPT_REUSEABLE, -1,
         (struct sockaddr *) &relay, sizeof(relay));
 
     if(!context.listener.tcp)
     {
         perror("evconnlistener_new_bind");
-        return 4;
+        return 3;
     }
 
     if(options.interface)
@@ -273,10 +267,9 @@ int32_t main(int32_t argc, char **argv)
         }
     }
 
-    evconnlistener_set_error_cb(    context.listener.tcp,
-                                    error_on_control_connection_listener);
+    evconnlistener_set_error_cb(context.listener.tcp,
+                                error_on_control_listener);
 
-    struct timeval five_seconds = { 5, 0 };
     context.msg_alive.type = ALIVE;
     context.alive = 1;
     context.keepalive = event_new(  context.events,
@@ -284,8 +277,6 @@ int32_t main(int32_t argc, char **argv)
                                     EV_TIMEOUT | EV_PERSIST,
                                     keepalive,
                                     NULL);
-
-    event_add(context.keepalive, &five_seconds);
 
     struct timeval thirty_seconds = { 30, 0 };
     struct event *stats = event_new(context.events,
@@ -324,16 +315,16 @@ int32_t main(int32_t argc, char **argv)
 }
 
 static
-void accept_control_connection( struct evconnlistener *listener,
-                                evutil_socket_t fd,
-                                struct sockaddr *address,
-                                int socklen,
-                                void *args)
+void accept_control(struct evconnlistener *listener,
+                    evutil_socket_t fd,
+                    struct sockaddr *address,
+                    int socklen,
+                    void *_)
 {
     assert(address->sa_family == AF_INET);
     memcpy(&context.control_address, address, sizeof(context.control_address));
     char buffer[INET_ADDRSTRLEN];
-    debug(  "control connection: from %s",
+    debug(  "control: from %s",
         inet_ntop(  AF_INET,
                     &context.control_address.sin_addr,
                     buffer,
@@ -354,25 +345,25 @@ void accept_control_connection( struct evconnlistener *listener,
     }
 
     bufferevent_setcb(  context.control_buffers,
-                        authenticate_control_connection,
+                        authenticate_control,
                         NULL,
-                        error_on_control_connection_bufferevent,
+                        error_on_control,
                         NULL);
 
     bufferevent_setwatermark(   context.control_buffers,
-                                EV_READ | EV_WRITE,
+                                EV_READ,
                                 sizeof(struct Message), BUFFER_LIMIT);
 
     bufferevent_enable(context.control_buffers, EV_READ | EV_WRITE);
 
     // disable new connections while authenticating
     evconnlistener_set_cb(listener, NULL, NULL);
-    setup_control_connection(context.control_buffers);
+    setup_control(context.control_buffers);
 }
 
 inline
 static
-void setup_control_connection(struct bufferevent *buffevent)
+void setup_control(struct bufferevent *bev)
 {
     struct MessageChallenge cha;
     cha.type = CHALLENGE;
@@ -381,17 +372,16 @@ void setup_control_connection(struct bufferevent *buffevent)
     authentication_prepare_response(    &context.challenge,
                                         &cha.challenge,
                                         options.password);
-    bufferevent_write(  buffevent,
+    bufferevent_write(  bev,
                         &cha,
                         sizeof(cha));
 }
 
 static
-void error_on_control_connection_listener(  struct evconnlistener *listener,
-                                            void *args)
+void error_on_control_listener(struct evconnlistener *listener, void *_)
 {
     int error = EVUTIL_SOCKET_ERROR();
-    debug(  "control connection: evconnlistener error %d %s",
+    debug(  "control: listener error %d %s",
             error, evutil_socket_error_to_string(error));
 
     event_base_loopexit(context.events, NULL);
@@ -399,38 +389,37 @@ void error_on_control_connection_listener(  struct evconnlistener *listener,
 }
 
 static
-void authenticate_control_connection(struct bufferevent *buffevent, void *args)
+void authenticate_control(struct bufferevent *bev, void *_)
 {
-    debug("control connection: authentication reading data");
+    debug("control: authentication reading data");
     context.alive = 1;
-    struct evbuffer *input  = bufferevent_get_input(buffevent);
-
+    struct evbuffer *input = bufferevent_get_input(bev);
     size_t len      = evbuffer_get_length(input);
     size_t wanted   = sizeof(struct MessageResponse);
     if(len < wanted)
         return;
 
-    debug("control connection: authentication checking message");
+    debug("control: authentication checking message");
     struct MessageResponse *res =
         (struct MessageResponse *) evbuffer_pullup(input, wanted);
 
     if(res->type != RESPONSE)
     {
-        debug(  "control connection: invalid authentication message %s",
+        debug(  "control: invalid authentication message %s",
                 message_get_type_string((struct Message *) res));
 
-        teardown_control_connection();
+        teardown_control();
         return;
     }
 
     if(!authentication_compare_hash(&context.challenge, &res->response))
     {
-        debug("control connection: authentication failed");
-        teardown_control_connection();
+        debug("control: authentication failed");
+        teardown_control();
         return;
     }
 
-    debug("control connection: authenticated");
+    debug("control: authenticated");
     struct MessageResponse res2;
     res2.type = RESPONSE;
     authentication_prepare_response(
@@ -439,39 +428,39 @@ void authenticate_control_connection(struct bufferevent *buffevent, void *args)
         options.password);
 
     evbuffer_drain(input, wanted);
-    bufferevent_write(  buffevent,
+    bufferevent_write(  bev,
                         &res2,
                         sizeof(res2));
 
-    bufferevent_setcb(  buffevent,
-                        read_control_connection,
+    bufferevent_setcb(  bev,
+                        read_control,
                         NULL,
-                        error_on_control_connection_bufferevent,
+                        error_on_control,
                         NULL);
 
-    setup_relay_connections();
-    read_control_connection(buffevent, args);
+    setup_relays();
+    read_control(bev, _);
 }
 
 inline
 static
-void process_control_message(struct bufferevent *buffevent, struct Message *msg)
+void process_control_message(struct bufferevent *bev, struct Message *msg)
 {
-    debug("control connection: processing message");
+    debug("control: processing message");
     switch(msg->type)
     {
         case NOOP:
-            debug("control connection: message NOOP");
+            debug("control: message NOOP");
             break;
 
         case ALIVE:
             {
                 struct MessageAlive *ali = (struct MessageAlive *) msg;
-                debug("control connection: message ALIVE(%d)", ali->seq);
+                debug("control: message ALIVE(%d)", ali->seq);
                 if(context.msg_alive.seq != ali->seq)
                 {
                     context.msg_alive.seq = ali->seq;
-                    bufferevent_write(  buffevent,
+                    bufferevent_write(  bev,
                                         &context.msg_alive,
                                         sizeof(context.msg_alive));
                 }
@@ -487,7 +476,7 @@ void process_control_message(struct bufferevent *buffevent, struct Message *msg)
                             +   (cur.tv_nsec + 999999LL) / 1000000LL
                         ) / 4;
 
-                    debug("control connection: estimated ping %ums",
+                    debug("control: estimated ping %ums",
                         context.ping);
                 }
             }
@@ -498,12 +487,12 @@ void process_control_message(struct bufferevent *buffevent, struct Message *msg)
                 struct MessageCloseChannel *clo =
                     (struct MessageCloseChannel *) msg;
 
-                debug("control connection: message CLOSE_CHANNEL");
+                debug("control: message CLOSE_CHANNEL");
                 union Channel *channel =
                     find_channel(&clo->response);
 
                 if(!channel)
-                    debug("control connection: channel doesn't exist");
+                    debug("control: channel doesn't exist");
 
                 else
                     teardown_channel(channel, 0);
@@ -513,7 +502,7 @@ void process_control_message(struct bufferevent *buffevent, struct Message *msg)
         case CHALLENGE:
         case RESPONSE:
             {
-                debug(  "control connection: not yet implemented message (%s)",
+                debug(  "control: not yet implemented message (%s)",
                         message_get_type_string(msg));
             }
             break;
@@ -521,7 +510,7 @@ void process_control_message(struct bufferevent *buffevent, struct Message *msg)
         case OPEN_CHANNEL:
         default:
             {
-                debug(  "control connection: invalid message (%s)",
+                debug(  "control: invalid message (%s)",
                         message_get_type_string(msg));
             }
             break;
@@ -530,10 +519,10 @@ void process_control_message(struct bufferevent *buffevent, struct Message *msg)
 
 inline
 static
-void teardown_control_connection(void)
+void teardown_control(void)
 {
     // disconnect everything and close...
-    teardown_relay_connections();
+    teardown_relays();
 
     bufferevent_free(context.control_buffers);
     context.control_buffers = NULL;
@@ -544,16 +533,16 @@ void teardown_control_connection(void)
 }
 
 static
-void accept_tcp_channel_connection( struct evconnlistener *listener,
-                                    evutil_socket_t fd,
-                                    struct sockaddr *address,
-                                    int socklen,
-                                    void *args)
+void accept_tcp_channel(struct evconnlistener *listener,
+                        evutil_socket_t fd,
+                        struct sockaddr *address,
+                        int socklen,
+                        void *_)
 {
     assert(address->sa_family == AF_INET);
     struct sockaddr_in *ipv4 = (struct sockaddr_in *) address;
     char buffer[INET_ADDRSTRLEN];
-    debug(  "tcp channel connection: from %s",
+    debug(  "tcp channel: from %s",
             inet_ntop(AF_INET, &(ipv4->sin_addr), buffer, INET_ADDRSTRLEN));
 
     if( ipv4->sin_family != context.control_address.sin_family
@@ -561,7 +550,7 @@ void accept_tcp_channel_connection( struct evconnlistener *listener,
                 &context.control_address.sin_addr,
                 sizeof(ipv4->sin_addr)))
     {
-        debug("tcp channel connection: invalid source address!");
+        debug("tcp channel: invalid source address!");
         close(fd);
         return;
     }
@@ -569,84 +558,82 @@ void accept_tcp_channel_connection( struct evconnlistener *listener,
     int32_t one = 1;
     setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, &one, sizeof(one));
 
-    struct bufferevent *buffevent = bufferevent_socket_new(
+    struct bufferevent *bev = bufferevent_socket_new(
         context.events,
         fd,
         BEV_OPT_CLOSE_ON_FREE | BEV_OPT_DEFER_CALLBACKS);
 
-    if(!buffevent)
+    if(!bev)
     {
         perror("bufferevent_socket_new");
         event_base_loopexit(context.events, NULL);
         return;
     }
 
-    bufferevent_setwatermark(buffevent, EV_READ | EV_WRITE, 0, BUFFER_LIMIT);
+    bufferevent_setwatermark(bev, EV_READ, 0, BUFFER_LIMIT);
     bufferevent_setcb(
-        buffevent,
-        authenticate_tcp_channel_connection,
+        bev,
+        authenticate_tcp_channel,
         NULL,
-        error_on_tcp_channel_connection_bufferevent,
+        error_on_tcp_channel,
         NULL);
 
-    bufferevent_enable(buffevent, EV_READ | EV_WRITE);
+    bufferevent_enable(bev, EV_READ | EV_WRITE);
 }
 
 static
-void authenticate_tcp_channel_connection(   struct bufferevent *buffevent,
-                                            void *args)
+void authenticate_tcp_channel(struct bufferevent *bev, void *_)
 {
-    debug("tcp channel connection: authentication reading data");
-    struct evbuffer *input  = bufferevent_get_input(buffevent);
-
+    debug("tcp channel: authentication reading data");
+    struct evbuffer *input  = bufferevent_get_input(bev);
     size_t len      = evbuffer_get_length(input);
     size_t wanted   = sizeof(struct MessageResponse);
     if(len < wanted)
         return;
 
-    debug("tcp channel connection: authentication checking message");
+    debug("tcp channel: authentication checking message");
     struct MessageResponse *res =
         (struct MessageResponse *) evbuffer_pullup(input, wanted);
 
     if(res->type != RESPONSE)
     {
-        debug(  "tcp channel connection: invalid authentication message %s",
+        debug(  "tcp channel: invalid authentication message %s",
                 message_get_type_string((struct Message *) res));
 
-        bufferevent_free(buffevent);
+        bufferevent_free(bev);
         return;
     }
 
     union Channel *current = find_channel(&res->response);
     if(!current)
     {
-        debug("tcp channel connection: authentication failed");
-        bufferevent_free(buffevent);
+        debug("tcp channel: authentication failed");
+        bufferevent_free(bev);
         return;
     }
 
     evbuffer_drain(input, wanted);
-    debug("tcp channel connection: authenticated");
+    debug("tcp channel: authenticated");
     assert(current->base.proto == IPPROTO_TCP);
-    current->tcp.channel_buffers = buffevent;
+    current->tcp.channel_buffers = bev;
     bufferevent_setcb(  current->tcp.peer_buffers,
-                        read_tcp_peer_connection,
-                        write_tcp_peer_connection,
-                        error_on_tcp_peer_connection_bufferevent,
+                        read_tcp_peer,
+                        NULL,
+                        error_on_tcp_peer,
                         current);
 
     bufferevent_enable(current->tcp.peer_buffers, EV_READ | EV_WRITE);
-    bufferevent_setcb(  buffevent,
-                        read_tcp_channel_connection,
-                        write_tcp_channel_connection,
-                        error_on_tcp_channel_connection_bufferevent,
+    bufferevent_setcb(  bev,
+                        read_tcp_channel,
+                        NULL,
+                        error_on_tcp_channel,
                         current);
 
-    read_tcp_channel_connection(buffevent, current);
+    read_tcp_channel(bev, current);
 }
 
 static
-void read_udp_channel_connection(evutil_socket_t fd, short events, void *args)
+void read_udp_channel(evutil_socket_t fd, short events, void *_)
 {
     struct sockaddr_in addr;
     socklen_t addr_size = sizeof(addr);
@@ -659,7 +646,7 @@ void read_udp_channel_connection(evutil_socket_t fd, short events, void *args)
                                 (struct sockaddr *) &addr,
                                 &addr_size)) == -1)
     {
-        error_on_udp_channel_connection(fd, events, args);
+        error_on_udp_channel(fd, events, _);
         return;
     }
 
@@ -668,7 +655,7 @@ void read_udp_channel_connection(evutil_socket_t fd, short events, void *args)
     {
         if(buff_size != sizeof(struct MessageResponse))
         {
-            debug("udp channel connection: doesn't exist");
+            debug("udp channel: doesn't exist");
             return;
         }
 
@@ -677,11 +664,11 @@ void read_udp_channel_connection(evutil_socket_t fd, short events, void *args)
 
         if(!chan)
         {
-            debug("udp channel connection: doesn't exist");
+            debug("udp channel: doesn't exist");
             return;
         }
 
-        debug("udp channel connection: authenticated");
+        debug("udp channel: authenticated");
         chan->udp.channel_fd = fd;
         memcpy(&chan->udp.channel_addr, &addr, sizeof(struct sockaddr_in));
         return;
@@ -695,7 +682,7 @@ void read_udp_channel_connection(evutil_socket_t fd, short events, void *args)
                 (struct sockaddr *) &channel->peer_addr,
                 addr_size) == -1)
     {
-        error_on_udp_peer_connection(fd, events, args);
+        error_on_udp_peer(fd, events, _);
         return;
     }
 
@@ -703,22 +690,138 @@ void read_udp_channel_connection(evutil_socket_t fd, short events, void *args)
 }
 
 static
-void error_on_udp_channel_connection(   evutil_socket_t fd,
-                                        short events,
-                                        void *args)
+void error_on_udp_channel(evutil_socket_t fd, short events, void *_)
 {
-    debug("udp peer connection: I don't really know what to do here.");
-    teardown_control_connection();
+    debug("udp peer: error.");
+    teardown_control();
+}
+
+static
+void accept_tcp_peer(   struct evconnlistener *listener,
+                        evutil_socket_t fd,
+                        struct sockaddr *address,
+                        int socklen,
+                        void *relay_listener)
+{
+    assert(address->sa_family == AF_INET);
+    struct sockaddr_in *ipv4 = (struct sockaddr_in *) address;
+    char buffer[INET_ADDRSTRLEN];
+    debug(  "tcp peer: from %s",
+            inet_ntop(AF_INET, &(ipv4->sin_addr), buffer, INET_ADDRSTRLEN));
+
+    int32_t one = 1;
+    setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, &one, sizeof(one));
+
+    struct bufferevent *bev = bufferevent_socket_new(
+        context.events,
+        fd,
+        BEV_OPT_CLOSE_ON_FREE | BEV_OPT_DEFER_CALLBACKS);
+
+    if(!bev)
+    {
+        perror("bufferevent_socket_new");
+        event_base_loopexit(context.events, NULL);
+        return;
+    }
+
+    bufferevent_setwatermark(bev, EV_READ, 0, BUFFER_LIMIT);
+
+    struct RelayListener *relay = (struct RelayListener *) relay_listener;
+    union Channel *channel = request_channel(relay->proto, relay->port);
+    if(!channel)
+    {
+        debug("tcp peer: no channels left!");
+        bufferevent_free(bev);
+        return;
+    }
+
+    channel->tcp.peer_buffers = bev;
+    bufferevent_setcb(
+        bev,
+        NULL,
+        NULL,
+        error_on_tcp_peer,
+        channel);
+}
+
+static
+void error_on_tcp_peer_listener(struct evconnlistener *listener, void *_)
+{
+    int error = EVUTIL_SOCKET_ERROR();
+    debug( "evconnlistener: %d %s\n",
+            error, evutil_socket_error_to_string(error));
+
+    event_base_loopexit(context.events, NULL);
+    return;
+}
+
+static
+void read_udp_peer(evutil_socket_t fd, short events, void *relay)
+{
+    struct RelayListener *listener = (struct RelayListener *) relay;
+
+    struct sockaddr_in addr;
+    socklen_t addr_size = sizeof(addr);
+    uint8_t buffer[BUFFER_LIMIT];
+    int32_t buff_size;
+    if((buff_size = recvfrom(   fd,
+                                &buffer,
+                                BUFFER_LIMIT,
+                                0,
+                                (struct sockaddr *) &addr,
+                                &addr_size)) == -1)
+    {
+        error_on_udp_peer(fd, events, relay);
+        return;
+    }
+
+    struct UDPChannel *channel = find_udp_channel_by_peer(&addr);
+    if(!channel)
+    {
+        union Channel *chan = request_channel(listener->proto, listener->port);
+        if(!chan)
+        {
+            debug("udp peer: no channels left!");
+            return;
+        }
+
+        chan->udp.peer_fd = fd;
+        memcpy(&chan->udp.peer_addr, &addr, addr_size);
+        return;
+    }
+
+    if(!channel->channel_fd)
+        return;
+
+    if(sendto(  channel->channel_fd,
+                buffer,
+                buff_size,
+                0,
+                (struct sockaddr *) &channel->channel_addr,
+                addr_size) == -1)
+    {
+        error_on_udp_channel(fd, events, relay);
+        return;
+    }
+
+    channel->base.alive = 2;
+}
+
+static
+void error_on_udp_peer(evutil_socket_t fd, short events, void *relay)
+{
+    debug("udp peer: error.");
+    teardown_control();
 }
 
 inline
 static
-void setup_relay_connections(void)
+void setup_relays(void)
 {
     if(!*options.relay_ports)
     {
-        debug("relay connections: missing ports");
-        teardown_control_connection();
+        debug("relays: missing ports");
+        teardown_control();
         return;
     }
 
@@ -726,12 +829,12 @@ void setup_relay_connections(void)
     for(context.relays_count = 1; *w; ++ w)
         context.relays_count += *w == ',';
 
-    debug("relay connections: setting up tcp channels port");
+    debug("relays: setting up tcp channels port");
     evconnlistener_set_cb(  context.listener.tcp,
-                            accept_tcp_channel_connection,
+                            accept_tcp_channel,
                             NULL);
 
-    debug("relay connections: setting up %d relay ports", context.relays_count);
+    debug("relays: setting up %d relay ports", context.relays_count);
     context.relays =
         (struct RelayListener *) malloc(
             context.relays_count * sizeof(struct RelayListener));
@@ -748,36 +851,34 @@ void setup_relay_connections(void)
         if(sscanf(w, "%[^:]:%hu:%hu,%n", proto, &port_from, &cur->port, &bytes)
             != 3)
         {
-            debug("relay connections: invalid relay ports format");
+            debug("relays: invalid relay ports format");
             context.relays_count = c;
-            teardown_control_connection();
+            teardown_control();
             return;
         }
 
         if(!strcmp(proto, "tcp"))
         {
-            debug(  "relay connections: setting up tcp relay %d -> %d",
+            debug(  "relays: setting up tcp relay %d -> %d",
                     port_from, cur->port);
 
             cur->proto = IPPROTO_TCP;
             struct sockaddr_in  relay; memset(&relay, 0, sizeof(relay));
-            relay.sin_family        = AF_INET;
+            relay.sin_family = AF_INET;
             if(options.address)
             {
-                debug(  "relay connections: binding to address %s",
-                        options.address);
-
+                debug("relays: binding to address %s", options.address);
                 inet_pton(AF_INET, options.address, &relay.sin_addr);
             }
 
             else
-                relay.sin_addr.s_addr   = INADDR_ANY;
+                relay.sin_addr.s_addr = INADDR_ANY;
 
-            relay.sin_port          = htons(port_from);
+            relay.sin_port = htons(port_from);
 
             cur->tcp_listener = evconnlistener_new_bind(
                 context.events,
-                accept_tcp_peer_connection, cur,
+                accept_tcp_peer, cur,
                 LEV_OPT_CLOSE_ON_FREE | LEV_OPT_REUSEABLE, -1,
                 (struct sockaddr *) &relay, sizeof(relay));
 
@@ -785,7 +886,7 @@ void setup_relay_connections(void)
             {
                 perror("evconnlistener_new_bind");
                 context.relays_count = c;
-                teardown_control_connection();
+                teardown_control();
                 return;
             }
 
@@ -794,7 +895,7 @@ void setup_relay_connections(void)
                 evutil_socket_t fd =
                     evconnlistener_get_fd(cur->tcp_listener);
 
-                debug(  "relay connections: binding fd:%d to interface %s",
+                debug(  "relays: binding fd:%d to interface %s",
                         fd,
                         options.interface);
 
@@ -809,13 +910,13 @@ void setup_relay_connections(void)
                 {
                     perror("setsockopt");
                     context.relays_count = c;
-                    teardown_control_connection();
+                    teardown_control();
                     return;
                 }
             }
 
             evconnlistener_set_error_cb(cur->tcp_listener,
-                                        error_on_tcp_peer_connection_listener);
+                                        error_on_tcp_peer_listener);
 
             ++ cur;
             w += bytes;
@@ -824,31 +925,29 @@ void setup_relay_connections(void)
         else if(!strcmp(proto, "udp"))
         {
             udp = 1;
-            debug("relay connections: setting up udp relay %d -> %d",
-                port_from, cur->port);
+            debug(  "relays: setting up udp relay %d -> %d",
+                    port_from, cur->port);
 
             cur->proto = IPPROTO_UDP;
             struct sockaddr_in  relay; memset(&relay, 0, sizeof(relay));
-            relay.sin_family        = AF_INET;
+            relay.sin_family = AF_INET;
             if(options.address)
             {
-                debug(  "relay connections: binding to address %s",
-                        options.address);
-
+                debug("relays: binding to address %s", options.address);
                 inet_pton(AF_INET, options.address, &relay.sin_addr);
             }
 
             else
-                relay.sin_addr.s_addr   = INADDR_ANY;
+                relay.sin_addr.s_addr = INADDR_ANY;
 
-            relay.sin_port          = htons(port_from);
+            relay.sin_port = htons(port_from);
 
             evutil_socket_t ufd = socket(AF_INET, SOCK_DGRAM, 0);
             assert(ufd != -1);
             //evutil_make_socket_nonblocking(ufd); maybe?
             if(options.interface)
             {
-                debug(  "relay connections: binding fd:%d to interface %s",
+                debug(  "relays: binding fd:%d to interface %s",
                         ufd,
                         options.interface);
 
@@ -862,7 +961,7 @@ void setup_relay_connections(void)
                 {
                     perror("setsockopt");
                     context.relays_count = c;
-                    teardown_control_connection();
+                    teardown_control();
                     return;
                 }
             }
@@ -871,14 +970,14 @@ void setup_relay_connections(void)
             {
                 perror("bind");
                 context.relays_count = c;
-                teardown_control_connection();
+                teardown_control();
                 return;
             }
 
             cur->udp_listener = event_new(  context.events,
                                             ufd,
                                             EV_READ | EV_PERSIST,
-                                            read_udp_peer_connection,
+                                            read_udp_peer,
                                             cur);
 
             event_add(cur->udp_listener, NULL);
@@ -889,35 +988,34 @@ void setup_relay_connections(void)
 
         else
         {
-            debug("relay connections: unsupported protocol %s", proto);
+            debug("relays: unsupported protocol %s", proto);
             context.relays_count = c;
-            teardown_control_connection();
+            teardown_control();
             return;
         }
     }
 
     if(udp)
     {
-        debug("relay connections: setting up udp channels port");
-        struct sockaddr_in  relay; memset(&relay, 0, sizeof(relay));
-
-        relay.sin_family        = AF_INET;
+        debug("relays: setting up udp channels port");
+        struct sockaddr_in relay; memset(&relay, 0, sizeof(relay));
+        relay.sin_family = AF_INET;
         if(options.address)
         {
-            debug("relay connections: binding to address %s", options.address);
+            debug("relays: binding to address %s", options.address);
             inet_pton(AF_INET, options.address, &relay.sin_addr);
         }
 
         else
-            relay.sin_addr.s_addr   = INADDR_ANY;
+            relay.sin_addr.s_addr = INADDR_ANY;
 
-        relay.sin_port          = htons(options.control_port);
+        relay.sin_port = htons(options.control_port);
 
         evutil_socket_t ufd = socket(AF_INET, SOCK_DGRAM, 0);
         //evutil_make_socket_nonblocking(ufd); maybe?
         if(options.interface)
         {
-            debug(  "relay connections: binding fd:%d to interface %s",
+            debug(  "relays: binding fd:%d to interface %s",
                     ufd,
                     options.interface);
 
@@ -930,7 +1028,7 @@ void setup_relay_connections(void)
                             sizeof(ifr)) == -1)
             {
                 perror("setsockopt");
-                teardown_control_connection();
+                teardown_control();
                 return;
             }
         }
@@ -938,14 +1036,14 @@ void setup_relay_connections(void)
         if(bind(ufd, (struct sockaddr *) &relay, sizeof(relay)) == -1)
         {
             perror("bind");
-            teardown_control_connection();
+            teardown_control();
             return;
         }
 
         context.listener.udp = event_new(   context.events,
                                             ufd,
                                             EV_READ | EV_PERSIST,
-                                            read_udp_channel_connection,
+                                            read_udp_channel,
                                             NULL);
 
         event_add(context.listener.udp, NULL);
@@ -954,9 +1052,9 @@ void setup_relay_connections(void)
 
 inline
 static
-void teardown_relay_connections(void)
+void teardown_relays(void)
 {
-    debug("relay connections: teardown");
+    debug("relays: teardown");
     struct RelayListener *cur = context.relays;
     for(int c = 0; c < context.relays_count; ++ c)
     {
@@ -989,129 +1087,6 @@ void teardown_relay_connections(void)
         teardown_channel(context.channels, 1);
 
     free(context.relays);
-}
-
-static
-void accept_tcp_peer_connection(struct evconnlistener *listener,
-                                evutil_socket_t fd,
-                                struct sockaddr *address,
-                                int socklen,
-                                void *relay_listener)
-{
-    assert(address->sa_family == AF_INET);
-    struct sockaddr_in *ipv4 = (struct sockaddr_in *) address;
-    char buffer[INET_ADDRSTRLEN];
-    debug(  "tcp peer connection: from %s",
-            inet_ntop(AF_INET, &(ipv4->sin_addr), buffer, INET_ADDRSTRLEN));
-
-    int32_t one = 1;
-    setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, &one, sizeof(one));
-
-    struct bufferevent *buffevent = bufferevent_socket_new(
-        context.events,
-        fd,
-        BEV_OPT_CLOSE_ON_FREE | BEV_OPT_DEFER_CALLBACKS);
-
-    if(!buffevent)
-    {
-        perror("bufferevent_socket_new");
-        event_base_loopexit(context.events, NULL);
-        return;
-    }
-
-    bufferevent_setwatermark(buffevent, EV_READ | EV_WRITE, 0, BUFFER_LIMIT);
-
-    struct RelayListener *relay = (struct RelayListener *) relay_listener;
-    union Channel *channel = request_channel(relay->proto, relay->port);
-    if(!channel)
-    {
-        debug("tcp peer connection: no channels left!");
-        bufferevent_free(buffevent);
-        return;
-    }
-
-    channel->tcp.peer_buffers = buffevent;
-    bufferevent_setcb(
-        buffevent,
-        NULL,
-        NULL,
-        error_on_tcp_peer_connection_bufferevent,
-        channel);
-}
-
-static
-void error_on_tcp_peer_connection_listener( struct evconnlistener *listener,
-                                            void *args)
-{
-    int error = EVUTIL_SOCKET_ERROR();
-    debug( "evconnlistener: %d %s\n",
-            error, evutil_socket_error_to_string(error));
-
-    event_base_loopexit(context.events, NULL);
-    return;
-}
-
-static
-void read_udp_peer_connection(  evutil_socket_t fd,
-                                short events,
-                                void *relay)
-{
-    struct RelayListener *listener = (struct RelayListener *) relay;
-
-    struct sockaddr_in addr;
-    socklen_t addr_size = sizeof(addr);
-    uint8_t buffer[BUFFER_LIMIT];
-    int32_t buff_size;
-    if((buff_size = recvfrom(   fd,
-                                &buffer,
-                                BUFFER_LIMIT,
-                                0,
-                                (struct sockaddr *) &addr,
-                                &addr_size)) == -1)
-    {
-        error_on_udp_peer_connection(fd, events, relay);
-        return;
-    }
-
-    struct UDPChannel *channel = find_udp_channel_by_peer(&addr);
-    if(!channel)
-    {
-        union Channel *chan = request_channel(listener->proto, listener->port);
-        if(!chan)
-        {
-            debug("udp peer connection: no channels left!");
-            return;
-        }
-
-        chan->udp.peer_fd = fd;
-        memcpy(&chan->udp.peer_addr, &addr, addr_size);
-        return;
-    }
-
-    if(!channel->channel_fd)
-        return;
-
-    if(sendto(  channel->channel_fd,
-                buffer,
-                buff_size,
-                0,
-                (struct sockaddr *) &channel->channel_addr,
-                addr_size) == -1)
-    {
-        error_on_udp_peer_connection(fd, events, relay);
-        return;
-    }
-
-    channel->base.alive = 2;
-}
-
-static
-void error_on_udp_peer_connection(  evutil_socket_t fd,
-                                    short events,
-                                    void *relay)
-{
-    debug("udp peer connection: I don't really know what to do here.");
-    teardown_control_connection();
 }
 
 inline

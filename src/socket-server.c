@@ -105,48 +105,39 @@ struct Context
 
 // CONTROL CONNECTION
 static
-void authenticate_control_connection(struct bufferevent *buffevent, void *args);
+void authenticate_control(struct bufferevent *bev, void *_);
 
 static
-void authenticate_mutual_control_connection(struct bufferevent *buffevent,
-                                            void *args);
-
-inline
-static
-void process_control_message(   struct bufferevent *buffevent,
-                                struct Message *msg);
+void authenticate_mutual_control(struct bufferevent *bev, void *_);
 
 inline
 static
-void teardown_control_connection(void);
+void process_control_message(struct bufferevent *bev, struct Message *msg);
+
+inline
+static
+void teardown_control(void);
 
 // CHANNEL CONNECTION
 static
-void read_udp_channel_connection(   evutil_socket_t fd,
-                                    short events,
-                                    void *channel);
+void read_udp_channel(evutil_socket_t fd, short events, void *chan);
 
 inline
 static
-void error_on_udp_channel_connection(   evutil_socket_t fd,
-                                        short events,
-                                        void *channel);
+void error_on_udp_channel(evutil_socket_t fd, short events, void *chan);
 
-// RELAY CONNECTION
-inline
+// PEER CONNECTION
 static
-void teardown_relay_connections(void);
-
-static
-void read_udp_peer_connection(  evutil_socket_t fd,
-                                short events,
-                                void *channel);
+void read_udp_peer(evutil_socket_t fd, short events, void *chan);
 
 inline
 static
-void error_on_udp_peer_connection(  evutil_socket_t fd,
-                                    short events,
-                                    void *channel);
+void error_on_udp_peer(evutil_socket_t fd, short events, void *chan);
+
+// RELAY CONNECTIONS
+inline
+static
+void teardown_relays(void);
 
 // CHANNELS
 inline
@@ -157,6 +148,8 @@ inline
 static
 void teardown_channel(union Channel *channel, uint8_t close_channel);
 
+//############################################################################//
+//
 #include "common.h"
 
 int32_t main(int32_t argc, char **argv)
@@ -274,18 +267,17 @@ int32_t main(int32_t argc, char **argv)
 
     assert(fd == bufferevent_getfd(context.control_buffers));
     bufferevent_setwatermark(   context.control_buffers,
-                                EV_READ | EV_WRITE,
+                                EV_READ,
                                 sizeof(struct Message),
                                 BUFFER_LIMIT);
 
     bufferevent_setcb(  context.control_buffers,
-                        authenticate_control_connection,
+                        authenticate_control,
                         NULL,
-                        error_on_control_connection_bufferevent,
+                        error_on_control,
                         NULL);
 
     bufferevent_enable(context.control_buffers, EV_READ | EV_WRITE);
-    struct timeval timeout = { 30, 0 };
     context.msg_alive.type = ALIVE;
     context.alive = 1;
     context.keepalive = event_new(  context.events,
@@ -293,8 +285,6 @@ int32_t main(int32_t argc, char **argv)
                                     EV_TIMEOUT | EV_PERSIST,
                                     keepalive,
                                     NULL);
-
-    event_add(context.keepalive, &timeout);
 
     struct timeval thirty_seconds = { 30, 0 };
     struct event *stats = event_new(context.events,
@@ -333,26 +323,25 @@ int32_t main(int32_t argc, char **argv)
 }
 
 static
-void authenticate_control_connection(struct bufferevent *buffevent, void *args)
+void authenticate_control(struct bufferevent *bev, void *_)
 {
-    debug("control connection: authentication reading data");
-    struct evbuffer *input  = bufferevent_get_input(buffevent);
-
+    debug("control: authentication reading data");
+    struct evbuffer *input  = bufferevent_get_input(bev);
     size_t len      = evbuffer_get_length(input);
     size_t wanted   = sizeof(struct MessageChallenge);
     if(len < wanted)
         return;
 
-    debug("control connection: authentication checking message");
+    debug("control: authentication checking message");
     struct MessageChallenge *cha =
         (struct MessageChallenge *) evbuffer_pullup(input, wanted);
 
     if(cha->type != CHALLENGE)
     {
-        debug(  "control connection: invalid authentication message %s",
+        debug(  "control: invalid authentication message %s",
                 message_get_type_string((struct Message *) cha));
 
-        teardown_control_connection();
+        teardown_control();
         return;
     }
 
@@ -370,82 +359,80 @@ void authenticate_control_connection(struct bufferevent *buffevent, void *args)
         &res.response,
         options.password);
 
-    bufferevent_write(  buffevent,
+    bufferevent_write(  bev,
                         &res,
                         sizeof(res));
 
-    bufferevent_setcb(  buffevent,
-                        authenticate_mutual_control_connection,
+    bufferevent_setcb(  bev,
+                        authenticate_mutual_control,
                         NULL,
-                        error_on_control_connection_bufferevent,
+                        error_on_control,
                         NULL);
 
-    authenticate_mutual_control_connection(buffevent, args);
+    authenticate_mutual_control(bev, _);
 }
 
 static
-void authenticate_mutual_control_connection( struct bufferevent *buffevent,
-                                            void *args)
+void authenticate_mutual_control(struct bufferevent *bev, void *_)
 {
-    debug("control connection: mutual authentication reading data");
-    struct evbuffer *input  = bufferevent_get_input(buffevent);
-
+    debug("control: mutual authentication reading data");
+    struct evbuffer *input  = bufferevent_get_input(bev);
     size_t len      = evbuffer_get_length(input);
     size_t wanted   = sizeof(struct MessageResponse);
     if(len < wanted)
         return;
 
-    debug("control connection: mutual authentication checking message");
+    debug("control: mutual authentication checking message");
     struct MessageResponse *res =
         (struct MessageResponse *) evbuffer_pullup(input, wanted);
 
     if(res->type != RESPONSE)
     {
-        debug(  "control connection: invalid mutual authentication message %s",
+        debug(  "control: invalid mutual authentication message %s",
                 message_get_type_string((struct Message *) res));
 
-        teardown_control_connection();
+        teardown_control();
         return;
     }
 
     if(!authentication_compare_hash(&context.challenge, &res->response))
     {
-        debug("control connection: mutual authentication failed");
-        teardown_control_connection();
+        debug("control: mutual authentication failed");
+        teardown_control();
         return;
     }
 
     evbuffer_drain(input, wanted);
-    debug("control connection: mutually authenticated");
+    debug("control: mutually authenticated");
 
-    bufferevent_setcb(  buffevent,
-                        read_control_connection,
+    bufferevent_setcb(  bev,
+                        read_control,
                         NULL,
-                        error_on_control_connection_bufferevent,
+                        error_on_control,
                         NULL);
 
-    read_control_connection(buffevent, args);
+    read_control(bev, _);
 }
 
 inline
 static
-void process_control_message(struct bufferevent *buffevent, struct Message *msg)
+void process_control_message(struct bufferevent *bev, struct Message *msg)
 {
-    debug("control connection: processing message");
+    debug("control: processing message");
     switch(msg->type)
     {
         case NOOP:
-            debug("control connection: message NOOP");
+            debug("control: message NOOP");
             break;
 
         case ALIVE:
             {
                 struct MessageAlive *ali = (struct MessageAlive *) msg;
-                debug("control connection: message ALIVE(%d)", ali->seq);
+                debug("control: message ALIVE(%d)", ali->seq);
                 if(context.msg_alive.seq != ali->seq)
                 {
                     context.msg_alive.seq = ali->seq;
-                    bufferevent_write(  buffevent,
+                    bufferevent_write(  bev,
                                         &context.msg_alive,
                                         sizeof(context.msg_alive));
                 }
@@ -461,8 +448,7 @@ void process_control_message(struct bufferevent *buffevent, struct Message *msg)
                             +   (cur.tv_nsec + 999999LL) / 1000000LL
                         ) / 4;
 
-                    debug("control connection: estimated ping %ums",
-                        context.ping);
+                    debug("control: estimated ping %ums", context.ping);
                 }
             }
             break;
@@ -472,12 +458,12 @@ void process_control_message(struct bufferevent *buffevent, struct Message *msg)
                 struct MessageCloseChannel *clo =
                     (struct MessageCloseChannel *) msg;
 
-                debug("control connection: message CLOSE_CHANNEL");
+                debug("control: message CLOSE_CHANNEL");
                 union Channel *channel =
                     find_channel(&clo->response);
 
                 if(!channel)
-                    debug("control connection: channel doesn't exist");
+                    debug("control: channel doesn't exist");
 
                 else
                     teardown_channel(channel, 0);
@@ -486,26 +472,26 @@ void process_control_message(struct bufferevent *buffevent, struct Message *msg)
 
         case OPEN_CHANNEL:
             {
-                debug("control connection: message OPEN_CHANNEL");
+                debug("control: message OPEN_CHANNEL");
                 union Channel *channel =
                     setup_channel((struct MessageOpenChannel *) msg);
 
                 if(!channel)
-                    debug("control connection: couldn't allocate channel");
+                    debug("control: couldn't allocate channel");
             }
             break;
 
         case CHALLENGE:
         case RESPONSE:
             {
-                debug(  "control connection: not yet implemented message (%s)",
+                debug(  "control: not yet implemented message (%s)",
                         message_get_type_string(msg));
             }
             break;
 
         default:
             {
-                debug(  "control connection: invalid message (%s)",
+                debug(  "control: invalid message (%s)",
                         message_get_type_string(msg));
             }
             break;
@@ -514,10 +500,10 @@ void process_control_message(struct bufferevent *buffevent, struct Message *msg)
 
 inline
 static
-void teardown_control_connection(void)
+void teardown_control(void)
 {
     // disconnect everything and close...
-    teardown_relay_connections();
+    teardown_relays();
 
     bufferevent_free(context.control_buffers);
     context.control_buffers = NULL;
@@ -526,11 +512,9 @@ void teardown_control_connection(void)
 }
 
 static
-void read_udp_channel_connection(   evutil_socket_t fd,
-                                    short events,
-                                    void *channel)
+void read_udp_channel(evutil_socket_t fd, short events, void *chan)
 {
-    union Channel *chan = (union Channel *) channel;
+    struct UDPChannel *channel = &((union Channel *) chan)->udp;
 
     struct sockaddr_in addr;
     socklen_t addr_size = sizeof(addr);
@@ -543,89 +527,82 @@ void read_udp_channel_connection(   evutil_socket_t fd,
                                 (struct sockaddr *) &addr,
                                 &addr_size)) == -1)
     {
-        error_on_udp_channel_connection(fd, events, channel);
+        error_on_udp_channel(fd, events, chan);
         return;
     }
 
-    if(sendto(  chan->udp.peer_fd,
+    if(sendto(  channel->peer_fd,
                 buffer,
                 buff_size,
                 0,
-                (struct sockaddr *) &chan->udp.peer_addr,
+                (struct sockaddr *) &channel->peer_addr,
                 addr_size) == -1)
     {
-        error_on_udp_channel_connection(fd, events, channel);
+        error_on_udp_peer(fd, events, chan);
         return;
     }
 
-    chan->base.alive = 2;
+    channel->base.alive = 2;
 }
 
 inline
 static
-void error_on_udp_channel_connection(   evutil_socket_t fd,
-                                        short events,
-                                        void *channel)
+void error_on_udp_channel(evutil_socket_t fd, short events, void *chan)
 {
-    debug("udp channel connection: error");
-    teardown_channel((union Channel *) channel, 1);
+    debug("udp channel: error");
+    teardown_channel((union Channel *) chan, 1);
+}
+
+static
+void read_udp_peer(evutil_socket_t fd, short events, void *chan)
+{
+    struct UDPChannel *channel = &((union Channel *) chan)->udp;
+
+    struct sockaddr_in addr;
+    socklen_t addr_size = sizeof(addr);
+    uint8_t buffer[BUFFER_LIMIT];
+    int32_t buff_size;
+    if((buff_size = recvfrom(   fd,
+                                &buffer,
+                                BUFFER_LIMIT,
+                                0,
+                                (struct sockaddr *) &addr,
+                                &addr_size)) == -1)
+    {
+        error_on_udp_peer(fd, events, chan);
+        return;
+    }
+
+    if(sendto(  channel->channel_fd,
+                buffer,
+                buff_size,
+                0,
+                (struct sockaddr *) &channel->channel_addr,
+                addr_size) == -1)
+    {
+        error_on_udp_channel(fd, events, chan);
+        return;
+    }
+
+    channel->base.alive = 2;
 }
 
 inline
 static
-void teardown_relay_connections(void)
+void error_on_udp_peer(evutil_socket_t fd, short events, void *chan)
+{
+    debug("udp peer: error");
+    teardown_channel((union Channel *) chan, 1);
+}
+
+inline
+static
+void teardown_relays(void)
 {
     debug("relay connections: teardown");
     while(context.channels)
         teardown_channel(context.channels, 1);
 }
-
-static
-void read_udp_peer_connection(  evutil_socket_t fd,
-                                short events,
-                                void *channel)
-{
-    union Channel *chan = (union Channel *) channel;
-
-    struct sockaddr_in addr;
-    socklen_t addr_size = sizeof(addr);
-    uint8_t buffer[BUFFER_LIMIT];
-    int32_t buff_size;
-    if((buff_size = recvfrom(   fd,
-                                &buffer,
-                                BUFFER_LIMIT,
-                                0,
-                                (struct sockaddr *) &addr,
-                                &addr_size)) == -1)
-    {
-        error_on_udp_peer_connection(fd, events, channel);
-        return;
-    }
-
-    if(sendto(  chan->udp.channel_fd,
-                buffer,
-                buff_size,
-                0,
-                (struct sockaddr *) &chan->udp.channel_addr,
-                addr_size) == -1)
-    {
-        error_on_udp_peer_connection(fd, events, channel);
-        return;
-    }
-
-    chan->base.alive = 2;
-}
-
-inline
-static
-void error_on_udp_peer_connection(  evutil_socket_t fd,
-                                    short events,
-                                    void *channel)
-{
-    debug("udp peer connection: error");
-    teardown_channel((union Channel *) channel, 1);
-}
-
 
 inline
 static
@@ -735,14 +712,14 @@ union Channel *setup_channel(struct MessageOpenChannel *ope)
 
                 assert(pfd == bufferevent_getfd(channel->tcp.peer_buffers));
                 bufferevent_setwatermark(   channel->tcp.peer_buffers,
-                                            EV_READ | EV_WRITE,
+                                            EV_READ,
                                             sizeof(struct Message),
                                             BUFFER_LIMIT);
 
                 bufferevent_setcb(  channel->tcp.peer_buffers,
-                                    read_tcp_peer_connection,
-                                    write_tcp_peer_connection,
-                                    error_on_tcp_peer_connection_bufferevent,
+                                    read_tcp_peer,
+                                    NULL,
+                                    error_on_tcp_peer,
                                     channel);
 
                 bufferevent_enable( channel->tcp.peer_buffers,
@@ -819,14 +796,14 @@ union Channel *setup_channel(struct MessageOpenChannel *ope)
 
                 assert(cfd == bufferevent_getfd(channel->tcp.channel_buffers));
                 bufferevent_setwatermark(   channel->tcp.channel_buffers,
-                                            EV_READ | EV_WRITE,
+                                            EV_READ,
                                             sizeof(struct Message),
                                             BUFFER_LIMIT);
 
                 bufferevent_setcb(  channel->tcp.channel_buffers,
-                                    read_tcp_channel_connection,
-                                    write_tcp_channel_connection,
-                                    error_on_tcp_channel_connection_bufferevent,
+                                    read_tcp_channel,
+                                    NULL,
+                                    error_on_tcp_channel,
                                     channel);
 
                 bufferevent_enable( channel->tcp.channel_buffers,
@@ -928,7 +905,7 @@ union Channel *setup_channel(struct MessageOpenChannel *ope)
                 channel->udp.peer_event = event_new(context.events,
                                                     channel->udp.peer_fd,
                                                     EV_READ | EV_PERSIST,
-                                                    read_udp_peer_connection,
+                                                    read_udp_peer,
                                                     channel);
 
                 event_add(channel->udp.peer_event, NULL);
@@ -1017,7 +994,7 @@ union Channel *setup_channel(struct MessageOpenChannel *ope)
                     context.events,
                     channel->udp.channel_fd,
                     EV_READ | EV_PERSIST,
-                    read_udp_channel_connection,
+                    read_udp_channel,
                     channel);
 
                 event_add(channel->udp.channel_event, NULL);
