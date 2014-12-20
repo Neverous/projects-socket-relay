@@ -681,12 +681,12 @@ void read_udp_channel(evutil_socket_t fd, short events, void *_)
                 chan->udp.pre_buffer,
                 pre_buff_size);
 
-            assert(channel->peer_fd);
-            if(sendto(  channel->peer_fd,
+            assert(chan->udp.peer_fd);
+            if(sendto(  chan->udp.peer_fd,
                         pre_buffer,
                         pre_buff_size,
                         0,
-                        (struct sockaddr *) &channel->peer_addr,
+                        (struct sockaddr *) &chan->udp.peer_addr,
                         addr_size) == -1)
             {
                 error_on_udp_peer(fd, events, _);
@@ -698,7 +698,7 @@ void read_udp_channel(evutil_socket_t fd, short events, void *_)
 
         evbuffer_free(chan->udp.pre_buffer);
         chan->udp.pre_buffer = NULL;
-        channel->base.alive = 2;
+        chan->base.alive = 2;
         return;
     }
 
