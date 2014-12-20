@@ -30,6 +30,8 @@ struct UDPChannel
     struct event                *peer_event;
     evutil_socket_t             peer_fd;
     struct sockaddr_in          peer_addr;
+
+    struct evbuffer             *pre_buffer;
 }; // struct UDPChannel
 
 struct TCPChannel

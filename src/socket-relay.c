@@ -670,6 +670,35 @@ void read_udp_channel(evutil_socket_t fd, short events, void *_)
         debug("udp channel: authenticated");
         chan->udp.channel_fd = fd;
         memcpy(&chan->udp.channel_addr, &addr, sizeof(struct sockaddr_in));
+        while(evbuffer_get_length(chan->udp.pre_buffer) > 0)
+        {
+            int32_t pre_buff_size = 0;
+            evbuffer_remove(chan->udp.pre_buffer,
+                            &pre_buff_size,
+                            sizeof(int32_t));
+
+            const char *pre_buffer = (const char *) evbuffer_pullup(
+                chan->udp.pre_buffer,
+                pre_buff_size);
+
+            assert(channel->peer_fd);
+            if(sendto(  channel->peer_fd,
+                        pre_buffer,
+                        pre_buff_size,
+                        0,
+                        (struct sockaddr *) &channel->peer_addr,
+                        addr_size) == -1)
+            {
+                error_on_udp_peer(fd, events, _);
+                return;
+            }
+
+            evbuffer_drain(chan->udp.pre_buffer, pre_buff_size);
+        }
+
+        evbuffer_free(chan->udp.pre_buffer);
+        chan->udp.pre_buffer = NULL;
+        channel->base.alive = 2;
         return;
     }
 
@@ -786,11 +815,27 @@ void read_udp_peer(evutil_socket_t fd, short events, void *relay)
 
         chan->udp.peer_fd = fd;
         memcpy(&chan->udp.peer_addr, &addr, addr_size);
+        chan->udp.pre_buffer = evbuffer_new();
+        if(buff_size + sizeof(int32_t) <= BUFFER_LIMIT)
+        {
+            evbuffer_add(chan->udp.pre_buffer, &buff_size, sizeof(int32_t));
+            evbuffer_add(chan->udp.pre_buffer, buffer, buff_size);
+        }
+
         return;
     }
 
     if(!channel->channel_fd)
+    {
+        if(evbuffer_get_length(channel->pre_buffer)
+            + buff_size + sizeof(int32_t) <= BUFFER_LIMIT)
+        {
+            evbuffer_add(channel->pre_buffer, &buff_size, sizeof(int32_t));
+            evbuffer_add(channel->pre_buffer, buffer, buff_size);
+        }
+
         return;
+    }
 
     if(sendto(  channel->channel_fd,
                 buffer,
@@ -1167,6 +1212,11 @@ void teardown_channel(union Channel *channel, uint8_t close_channel)
             break;
 
         case IPPROTO_UDP:
+            if(channel->udp.pre_buffer)
+            {
+                evbuffer_free(channel->udp.pre_buffer);
+                channel->udp.pre_buffer = NULL;
+            }
             break;
 
         default:
