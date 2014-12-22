@@ -669,7 +669,7 @@ void read_udp_channel(evutil_socket_t fd, short events, void *_)
 
         debug("udp channel: authenticated");
         chan->udp.channel_fd = fd;
-        memcpy(&chan->udp.channel_addr, &addr, sizeof(struct sockaddr_in));
+        memcpy(&chan->udp.channel_addr, &addr, addr_size);
         while(evbuffer_get_length(chan->udp.pre_buffer) > 0)
         {
             int32_t pre_buff_size = 0;
@@ -681,15 +681,15 @@ void read_udp_channel(evutil_socket_t fd, short events, void *_)
                 chan->udp.pre_buffer,
                 pre_buff_size);
 
-            assert(chan->udp.peer_fd);
-            if(sendto(  chan->udp.peer_fd,
+            assert(chan->udp.channel_fd);
+            if(sendto(  chan->udp.channel_fd,
                         pre_buffer,
                         pre_buff_size,
                         0,
-                        (struct sockaddr *) &chan->udp.peer_addr,
+                        (struct sockaddr *) &chan->udp.channel_addr,
                         addr_size) == -1)
             {
-                error_on_udp_peer(fd, events, _);
+                error_on_udp_channel(fd, events, _);
                 return;
             }
 
