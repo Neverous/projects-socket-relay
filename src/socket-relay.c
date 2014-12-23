@@ -42,7 +42,7 @@ const char *HELP    = "Usage: socket-relay [options]\n\n\
     -i --interface      INTERFACE[=any]                     Network interface to use.\n\
     -a --address        ADDRESS[=any]                       IP Address to use.\n\
     -c --control-port   PORT[=10000]                        Control port.\n\
-    -r --relay-ports    PORTS[=tcp:10080:80,tcp:10022:22]   Relay ports.\n\
+    -r --relay-ports    PORTS[=tcp:10080,tcp:10022]         Relay ports.\n\
     -p --password       PASSWORD[=1234]                     Password.";
 
 const char *SHORT_OPTIONS           = "hvi:a:c:r:p:";
@@ -67,7 +67,7 @@ struct Options
     const char  *address;
 } options = {
     10000,
-    "tcp:10080:80,tcp:10022:22",
+    "tcp:10080,tcp:10022",
     "1234",
     NULL,
     NULL,
@@ -889,11 +889,9 @@ void setup_relays(void)
     for(int c = 0; c < context.relays_count; ++ c)
     {
         char        proto[4];
-        uint16_t    port_from;
         int32_t     bytes;
 
-        if(sscanf(w, "%[^:]:%hu:%hu,%n", proto, &port_from, &cur->port, &bytes)
-            != 3)
+        if(sscanf(w, "%[^:]:%hu,%n", proto, &cur->port, &bytes) != 2)
         {
             debug("relays: invalid relay ports format");
             context.relays_count = c;
@@ -903,8 +901,7 @@ void setup_relays(void)
 
         if(!strcmp(proto, "tcp"))
         {
-            debug(  "relays: setting up tcp relay %d -> %d",
-                    port_from, cur->port);
+            debug("relays: setting up tcp relay %d", cur->port);
 
             cur->proto = IPPROTO_TCP;
             struct sockaddr_in  relay; memset(&relay, 0, sizeof(relay));
@@ -918,7 +915,7 @@ void setup_relays(void)
             else
                 relay.sin_addr.s_addr = INADDR_ANY;
 
-            relay.sin_port = htons(port_from);
+            relay.sin_port = htons(cur->port);
 
             cur->tcp_listener = evconnlistener_new_bind(
                 context.events,
@@ -969,8 +966,7 @@ void setup_relays(void)
         else if(!strcmp(proto, "udp"))
         {
             udp = 1;
-            debug(  "relays: setting up udp relay %d -> %d",
-                    port_from, cur->port);
+            debug("relays: setting up udp relay %d", cur->port);
 
             cur->proto = IPPROTO_UDP;
             struct sockaddr_in  relay; memset(&relay, 0, sizeof(relay));
@@ -984,7 +980,7 @@ void setup_relays(void)
             else
                 relay.sin_addr.s_addr = INADDR_ANY;
 
-            relay.sin_port = htons(port_from);
+            relay.sin_port = htons(cur->port);
 
             evutil_socket_t ufd = socket(AF_INET, SOCK_DGRAM, 0);
             assert(ufd != -1);

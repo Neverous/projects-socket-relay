@@ -36,16 +36,16 @@
 
 // Usage options and info
 const char *HELP    = "Usage: socket-server [options]\n\n\
-    -h --help                                   Display this usage information.\n\
-    -v --version                                Display program version.\n\
-    -i --input-interface    INTERFACE[=any]     Input interface to bind to.\n\
-    -a --input-address      ADDRESS[=any]       Input address to bind to.\n\
-    -o --output-interface   INTERFACE[=any]     Output interface to bind to.\n\
-    -b --output-address     ADDRESS[=any]       Output address to bind to.\n\
-    -r --relay-host         HOST[=localhost]    Address of the relay.\n\
-    -s --host               HOST[=localhost]    Destination address.\n\
-    -c --control-port       PORT[=10000]        Control port of the relay.\n\
-    -p --password           PASSWORD[=1234]     Password.";
+    -h --help                                                                               Display this usage information.\n\
+    -v --version                                                                            Display program version.\n\
+    -i --input-interface    INTERFACE[=any]                                                 Input interface to bind to.\n\
+    -a --input-address      ADDRESS[=any]                                                   Input address to bind to.\n\
+    -o --output-interface   INTERFACE[=any]                                                 Output interface to bind to.\n\
+    -b --output-address     ADDRESS[=any]                                                   Output address to bind to.\n\
+    -r --relay-host         HOST[=localhost]                                                Address of the relay.\n\
+    -s --destinations       DESTINATIONS[=tcp:10080:127.0.0.1:80,tcp:10022:127.0.0.1:22]    Relay ports.\n\
+    -c --control-port       PORT[=10000]                                                    Control port of the relay.\n\
+    -p --password           PASSWORD[=1234]                                                 Password.";
 
 const char *SHORT_OPTIONS           = "hvi:a:o:b:r:s:c:p:";
 const struct option LONG_OPTIONS[] =
@@ -57,7 +57,7 @@ const struct option LONG_OPTIONS[] =
     {"output-interface",    required_argument,  NULL,   'o'}, // output interface to bind to
     {"output-address",      required_argument,  NULL,   'b'}, // output address to bind to
     {"relay-host",          required_argument,  NULL,   'r'}, // relay address
-    {"host",                required_argument,  NULL,   's'}, // destination address
+    {"destinations",        required_argument,  NULL,   's'}, // destinations
     {"control-port",        required_argument,  NULL,   'c'}, // relay control port
     {"password",            required_argument,  NULL,   'p'}, // password
     {NULL,                  0,                  NULL,   0},
@@ -67,7 +67,7 @@ struct Options
 {
     int16_t     control_port;
     const char  *relay_host;
-    const char  *host;
+    const char  *destinations;
     const char  *password;
     const char  *input_interface;
     const char  *input_address;
@@ -76,12 +76,20 @@ struct Options
 } options = {
     10000,
     "localhost",
-    "localhost",
+    "tcp:10080:127.0.0.1:80,tcp:10022:127.0.0.1:22",
     "1234",
     NULL,
     NULL,
     NULL,
     NULL,
+};
+
+struct Destination
+{
+    uint8_t     proto;
+    uint16_t    from_port;
+    char        to_address[INET_ADDRSTRLEN];
+    uint16_t    to_port;
 };
 
 struct Context
@@ -101,7 +109,18 @@ struct Context
     int32_t         allocated_channels;
     union Channel   *channels;
     union Channel   *free_channels;
+
+    struct Destination  *destinations;
+    int32_t             destinations_count;
 } context;
+
+inline
+static
+void parse_destinations(void);
+
+inline
+static
+struct Destination *find_destination(uint8_t proto, uint16_t from_port);
 
 // CONTROL CONNECTION
 static
@@ -180,7 +199,7 @@ int32_t main(int32_t argc, char **argv)
             case 'r': options.relay_host = optarg;
                 break;
 
-            case 's': options.host = optarg;
+            case 's': options.destinations = optarg;
                 break;
 
             case 'c': options.control_port = atoi(optarg);
@@ -192,6 +211,8 @@ int32_t main(int32_t argc, char **argv)
             case '?': fputs(HELP, stderr);
                 return 1;
         }
+
+    parse_destinations();
 
     context.events = event_base_new();
     if(!context.events)
@@ -319,6 +340,76 @@ int32_t main(int32_t argc, char **argv)
     event_free(context.keepalive);
     context.keepalive = NULL;
     return 0;
+}
+
+inline
+static
+void parse_destinations(void)
+{
+    if(!*options.destinations)
+    {
+        debug("main: missing destinations");
+        teardown_control();
+        return;
+    }
+
+    const char *w = options.destinations;
+    for(context.destinations_count = 1; *w; ++ w)
+        context.destinations_count += *w == ',';
+
+    context.destinations =
+        (struct Destination *) malloc(
+            context.destinations_count * sizeof(struct Destination));
+
+    w = options.destinations;
+    struct Destination *cur = context.destinations;
+    for(int c = 0; c < context.destinations_count; ++ c)
+    {
+        int32_t bytes;
+        char    proto[4];
+
+        if(sscanf(  w, "%[^:]:%hu:%[^:]:%hu,%n",
+                    proto,
+                    &cur->from_port,
+                    cur->to_address,
+                    &cur->to_port,
+                    &bytes) != 4)
+        {
+            debug("main: invalid destination format");
+            context.destinations_count = c;
+            teardown_control();
+            return;
+        }
+
+        if(!strcmp(proto, "tcp"))
+            cur->proto = IPPROTO_TCP;
+
+        else if(!strcmp(proto, "udp"))
+            cur->proto = IPPROTO_UDP;
+
+        else
+        {
+            debug("main: unsupported protocol %s", proto);
+            context.destinations_count = c;
+            teardown_control();
+            return;
+        }
+
+        ++ cur;
+        w += bytes;
+    }
+
+}
+
+inline
+static
+struct Destination *find_destination(uint8_t proto, uint16_t from_port)
+{
+    struct Destination *cur = context.destinations;
+    while(cur && (proto != cur->proto || from_port != cur->from_port))
+        ++ cur;
+
+    return cur;
 }
 
 static
@@ -608,6 +699,15 @@ static
 union Channel *setup_channel(struct MessageOpenChannel *ope)
 {
     debug("channel: setup %d %d", ope->proto, ntohs(ope->port));
+    struct Destination *destination =
+        find_destination(ope->proto, ntohs(ope->port));
+
+    if(!destination)
+    {
+        debug("channel: invalid destination received");
+        return NULL;
+    }
+
     if(!context.free_channels)
         allocate_channels();
 
@@ -639,7 +739,11 @@ union Channel *setup_channel(struct MessageOpenChannel *ope)
     {
         case IPPROTO_TCP:
             {
-                debug("channel: setting up tcp");
+                debug(  "channel: setting up tcp(%hu -> %s:%hu)",
+                        destination->from_port,
+                        destination->to_address,
+                        destination->to_port);
+
                 evutil_socket_t pfd = socket(AF_INET, SOCK_STREAM, 0);
                 assert(pfd != -1);
                 evutil_make_socket_nonblocking(pfd);
@@ -706,8 +810,8 @@ union Channel *setup_channel(struct MessageOpenChannel *ope)
                 bufferevent_socket_connect_hostname(channel->tcp.peer_buffers,
                                                     context.dns,
                                                     AF_INET,
-                                                    options.host,
-                                                    ntohs(ope->port));
+                                                    destination->to_address,
+                                                    destination->to_port);
 
                 assert(pfd == bufferevent_getfd(channel->tcp.peer_buffers));
                 bufferevent_setwatermark(   channel->tcp.peer_buffers,
@@ -816,7 +920,11 @@ union Channel *setup_channel(struct MessageOpenChannel *ope)
 
         case IPPROTO_UDP:
             {
-                debug("channel: setting up udp");
+                debug(  "channel: setting up udp(%hu -> %s:%hu)",
+                        destination->from_port,
+                        destination->to_address,
+                        destination->to_port);
+
                 char port_buf[6];
                 struct evutil_addrinfo hints; memset(&hints, 0, sizeof(hints));
                 struct evutil_addrinfo *answer = NULL;
@@ -826,13 +934,13 @@ union Channel *setup_channel(struct MessageOpenChannel *ope)
                 evutil_snprintf(port_buf,
                                 sizeof(port_buf),
                                 "%d",
-                                ntohs(ope->port));
+                                destination->to_port);
 
                 hints.ai_family = AF_INET;
                 hints.ai_socktype = SOCK_DGRAM;
                 hints.ai_protocol = IPPROTO_UDP;
                 hints.ai_flags = EVUTIL_AI_ADDRCONFIG;
-                err = evutil_getaddrinfo(   options.host,
+                err = evutil_getaddrinfo(   destination->to_address,
                                             port_buf,
                                             &hints,
                                             &answer);
@@ -840,7 +948,7 @@ union Channel *setup_channel(struct MessageOpenChannel *ope)
                 if(err != 0)
                 {
                     debug(  "channel: getaddrinfo(%s): %s",
-                            options.relay_host,
+                            destination->to_address,
                             evutil_gai_strerror(err));
 
                     teardown_channel(channel, 1);
@@ -928,7 +1036,7 @@ union Channel *setup_channel(struct MessageOpenChannel *ope)
                 if(err != 0)
                 {
                     debug(  "channel: getaddrinfo(%s): %s",
-                            options.host,
+                            options.relay_host,
                             evutil_gai_strerror(err));
 
                     teardown_channel(channel, 1);
